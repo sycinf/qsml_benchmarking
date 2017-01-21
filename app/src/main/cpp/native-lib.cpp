@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <string>
 #include <sstream>
+#include <qsml.h>
 
 
 #define NANOS 1000000000LL
@@ -58,13 +59,15 @@ extern "C"
         timecount = timer_start();
         for(int repInd = 0; repInd < repeat; repInd++)
         {
-
+            sconv_mm(false, inputImage, imgWidth, imgHeight, channel,
+                     kernels, numKnls, knlWidth, knlHeight, 0, 0,
+                     1, 1, output, outputWidth, outputHeight);
         }
         long long timeSpent = timer_end(timecount);
         deallocate(inputImage);
         deallocate(kernels);
         deallocate(output);
-        rtStringStream<<timeSpent;
+        rtStringStream<<timeSpent/1000000<< "ms";
         return env->NewStringUTF(rtStringStream.str().c_str());
     }
 }

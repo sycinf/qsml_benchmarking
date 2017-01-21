@@ -4,6 +4,15 @@
 
 cmake_minimum_required(VERSION 3.4.1)
 
+if( NOT DEFINED QSML_LIBRARY )
+    set(QSML_LIBRARY "QSML")
+    set(QSML_LIBRARY "${QSML_LIBRARY}-sequential-0.15.2")
+    set(EXAMPLE_LIBRARIES ${QSML_LIBRARY})
+endif()
+
+include_directories(qsml_include)
+link_directories(qsml_libs)
+SET(CMAKE_CXX_FLAGS "-std=c++11 -O3 ")
 # Creates and names a library, sets it as either STATIC
 # or SHARED, and provides the relative paths to its source code.
 # You can define multiple libraries, and CMake builds it for you.
@@ -42,4 +51,5 @@ target_link_libraries( # Specifies the target library.
 
                        # Links the target library to the log library
                        # included in the NDK.
-                       ${log-lib} )
+                       ${log-lib}
+                       ${QSML_LIBRARY})
