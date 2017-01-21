@@ -1,3 +1,7 @@
 <resources>
     <string name="app_name">ConvolutionBenchmark</string>
+    <string-array name="conv_vendor_array">
+        <item>QSML</item>
+        <item>Numericcal</item>
+    </string-array>
 </resources>
