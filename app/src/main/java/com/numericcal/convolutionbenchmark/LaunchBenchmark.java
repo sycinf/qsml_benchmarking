@@ -30,7 +30,7 @@ public class LaunchBenchmark implements Runnable {
     }
     @Override
     public void run() {
-        String timeSpent = launchConv(repeat,imgWidth,imgHeight,knlWidth,knlHeight,channel,numKnls);
+        String timeSpent = launchConvNumericcal(repeat,imgWidth,imgHeight,knlWidth,knlHeight,channel,numKnls);
         String benchmarkProperties = ""+ repeat+" Repetition--Input:";
         benchmarkProperties+=" "+imgHeight+"x"+imgWidth+"x"+channel+"; Kernel: "+numKnls+"x"+knlWidth+"x"+knlHeight+"x"+channel;
 
@@ -43,7 +43,12 @@ public class LaunchBenchmark implements Runnable {
 
 
     }
-    public native String launchConv(int repeat_, int imgWidth_, int imgHeight_,
+    /*public native String launchConv(int repeat_, int imgWidth_, int imgHeight_,
+                                    int knlWidth_, int knlHeight_, int channel_,
+                                    int numKnls_);*/
+    public native String launchConvNumericcal(int repeat_, int imgWidth_, int imgHeight_,
                                     int knlWidth_, int knlHeight_, int channel_,
                                     int numKnls_);
+
+
 }

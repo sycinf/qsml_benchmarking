@@ -2,7 +2,7 @@
 #define MAXELE 20
 //#define DEBUGNEON
 #define USENEON
-#define CHANNELUNROLLFACTOR 16
+#define CHANNELUNROLLFACTOR 8
 
 #define LOGCATDEBUG
 #include <string>
@@ -479,11 +479,19 @@ inline float channelReduction(float* imgChannel, float* curKernelEle, int channe
         curI+=4;
         curK+=4;
     #elif CHANNELUNROLLFACTOR == 8
-        float32x4_t input1 = vld1q_f32(&imgChannel[cInd]);
-        float32x4_t kernel1 = vld1q_f32(&curKernelEle[cInd]);
+        float32x4_t input1 = vld1q_f32(curI);
+        float32x4_t kernel1 = vld1q_f32(curK);
+
+        float32x4_t input2 = vld1q_f32(curI+4);
+        float32x4_t kernel2 = vld1q_f32(curK+4);
+
         float32x4_t result1 = vmulq_f32(kernel1,input1);
-        float add2Final =vaddvq_f32(result1);
+        float32x4_t result2 = vmlaq_f32(result1,kernel2,input2);
+
+        float add2Final =vaddvq_f32(result2);
         final2+= add2Final;
+        curI+=8;
+        curK+=8;
     #elif CHANNELUNROLLFACTOR == 16
         float32x4_t input1 = vld1q_f32(curI);
         float32x4_t kernel1 = vld1q_f32(curK);
@@ -860,7 +868,10 @@ void numericcal_ChannelMajor(float* inputImage, int imgWidth, int imgHeight, int
 
 
 }
-
+/* gold model for row major */
+/* dimension of image:
+ *  height, channel, width
+ *  /
 
 
 
@@ -1107,54 +1118,64 @@ extern "C"
             JNIEnv *env,
             jobject)
     {
-        int repeat=1;
+        int repeat=10;
         int imgWidth=512;
         int imgHeight=512;
         int knlWidth=3;
         int knlHeight=3;
-        int channel=64;
+        int channel_upper=64;
+        int channel_lower=1;
         int numKnls=1;
+
         //LOGD("Hello world");
         int outputWidth = imgWidth-knlWidth+1;
         int outputHeight = imgHeight-knlHeight+1;
 
-        float* inputImage = allocateAndPopulate( 1, imgWidth, imgHeight,channel,FILLPOSITION);
-        float* kernels = allocateAndPopulate(numKnls, knlWidth,knlHeight,channel, FILLPOSITION);
+        float* inputImage = allocateAndPopulate( 1, imgWidth, imgHeight,channel_upper,FILLPOSITION);
+        float* kernels = allocateAndPopulate(numKnls, knlWidth,knlHeight,channel_upper, FILLPOSITION);
         float* numericcalOutput = allocateAndPopulate(numKnls, outputWidth, outputHeight, 1, FILLZERO);
-
+        float *goldenOutput = allocateAndPopulate(numKnls, outputWidth, outputHeight, 1, FILLZERO);
+    for(int channel=channel_upper; channel>=channel_lower; channel--) {
         struct timespec timecount;
         timecount = timer_start();
-        for(int repInd = 0; repInd < repeat; repInd++)
-        {
-            numericcal_ChannelMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls, knlWidth,
+        for (int repInd = 0; repInd < repeat; repInd++) {
+            numericcal_ChannelMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls,
+                                    knlWidth,
                                     knlHeight, numericcalOutput, outputWidth,
                                     outputHeight);
         }
         long long timeSpent = timer_end(timecount);
         // now perform the comparison with the golden model
-        float* goldenOutput = allocateAndPopulate(numKnls, outputWidth, outputHeight, 1, FILLZERO);
-        repopulate(numericcalOutput,numKnls,outputWidth,outputHeight,1,FILLZERO);
 
-        numericcal_ChannelMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls, knlWidth,
+        repopulate(numericcalOutput, numKnls, outputWidth, outputHeight, 1, FILLZERO);
+
+        numericcal_ChannelMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls,
+                                knlWidth,
                                 knlHeight, numericcalOutput, outputWidth,
                                 outputHeight);
-        goldChannelMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls, knlWidth, knlHeight,
+        goldChannelMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls, knlWidth,
+                         knlHeight,
                          goldenOutput, outputWidth, outputHeight);
-        float norml1dis = norml1DistanceOutput(numericcalOutput,goldenOutput,outputWidth*outputHeight*numKnls);
-        float l1dis = l1DistanceOutput(numericcalOutput,goldenOutput,outputWidth*outputHeight*numKnls);
+        float norml1dis = norml1DistanceOutput(numericcalOutput, goldenOutput,
+                                               outputWidth * outputHeight * numKnls);
+        float l1dis = l1DistanceOutput(numericcalOutput, goldenOutput,
+                                       outputWidth * outputHeight * numKnls);
+        repopulate(numericcalOutput, numKnls, outputWidth, outputHeight, 1, FILLZERO);
+        repopulate(goldenOutput, numKnls, outputWidth, outputHeight, 1, FILLZERO);
         timecount = timer_start();
-        for(int repInd = 0; repInd < repeat; repInd++)
-        {
+        for (int repInd = 0; repInd < repeat; repInd++) {
             sconv_mm(false, inputImage, imgWidth, imgHeight, channel,
                      kernels, numKnls, knlWidth, knlHeight, 0, 0,
                      1, 1, numericcalOutput, outputWidth, outputHeight);
         }
         long long timeSpent2 = timer_end(timecount);
+        LOGD("%d channel: %lld ms v.s. QSML %lld, L1 dist to Golden %f (normalized), %f (absolute)\n", channel, timeSpent/1000000, timeSpent2/1000000,norml1dis,l1dis);
+    }
         deallocate(inputImage);
         deallocate(kernels);
         deallocate(numericcalOutput);
         deallocate(goldenOutput);
-        LOGD("%lld ms v.s. QSML %lld, L1 dist to Golden %f (normalized), %f (absolute)\n", timeSpent/1000000, timeSpent2/1000000,norml1dis,l1dis);
+
         //rtStringStream<<timeSpent/1000000<< "ms v.s. QSML"<<timeSpent2/1000000<<", L1 dist to Golden "<<norml1dis<<"(normalized),"<<l1dis<<"(absolute)\n";
     }
 

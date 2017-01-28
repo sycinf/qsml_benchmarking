@@ -42,6 +42,8 @@ public class MainActivity extends AppCompatActivity {
                 benchmarkRunning = false;
             }
         };
+        launchConvNumericcalDummy();
+
     }
     public void onRunConvClick(View view)
     {
@@ -95,6 +97,7 @@ public class MainActivity extends AppCompatActivity {
 
 
     }
+    public native void launchConvNumericcalDummy();
 
 
 }
