@@ -612,7 +612,7 @@ void oneEleOneRow1_32(float* inputRow, int numMul, float* outputRow, float* elem
 
 
 
-void oneEleOneRow1_28(float* inputRow, int numMul, float* outputRow, float* element)
+inline void oneEleOneRow1_28(float* inputRow, int numMul, float* outputRow, float* element)
 {
     int num28 = numMul/28;
     float32x4_t eleDup = vld1q_dup_f32(element);
@@ -784,6 +784,56 @@ void numericcal_RowMajor(float* inputImage, int imgWidth, int imgHeight, int cha
     }
 }
 
+void threeEleThreeRow(float* inputRow, int numMul, float* outputRow, float* element)
+{
+    //this is sliding window
+    // 1. we load whole bunch
+    float32x4_t ele0Dup = vld1q_dup_f32(element);
+    float32x4_t ele1Dup = vld1q_dup_f32(element+1);
+    float32x4_t ele2Dup = vld1q_dup_f32(element+2);
+    float* curBatch = inputRow;
+    float* curOutBatch = outputRow;
+    int num4 = numMul/4;
+    for(int i = 0; i < num4; i++ ) {
+
+        float32x4_t input0 = vld1q_f32(curBatch);
+        float32x4_t input1 = vld1q_f32(curBatch + 1);
+        float32x4_t input2 = vld1q_f32(curBatch + 2);
+
+        float32x4_t output0 = vld1q_f32(curOutBatch);
+
+        float32x4_t result1;
+        result1 = vmlaq_f32(output0, ele0Dup, input0);
+        result1 = vmlaq_f32(result1, ele1Dup, input1);
+        result1 = vmlaq_f32(result1, ele2Dup, input2);
+        vst1q_f32(curOutBatch, result1);
+        curBatch+=4;
+        curOutBatch+=4;
+    }
+
+    int done = num4*4;
+    curBatch = inputRow+done;
+    curOutBatch = outputRow+done;
+
+
+    float ele0 = *element;
+    float ele1 = *(element+1);
+    float ele2 = *(element+2);
+    for(int i = 0; i < numMul%4; i++)
+    {
+        float m0 = *(curBatch+i);
+        float m1 = *(curBatch+i+1);
+        float m2 = *(curBatch+i+2);
+        *(curOutBatch+i) += m0*ele0+m1*ele1+m2*ele2;
+    }
+
+
+
+
+    /*oneEleOneRow1_28(inputRow, numMul, outputRow, element);
+    oneEleOneRow1_28(inputRow+1, numMul, outputRow, element+1);
+    oneEleOneRow1_28(inputRow+2, numMul, outputRow, element+2);*/
+}
 
 // here we do three rows together
 void numericcal_RowMajor_3Row(float* inputImage, int imgWidth, int imgHeight, int channel,
@@ -807,21 +857,15 @@ void numericcal_RowMajor_3Row(float* inputImage, int imgWidth, int imgHeight, in
     // first row
     for(int cInd = 0; cInd < channel; cInd++) {
         int offsetChannel = cInd*knlPerChannelSize;
-        oneEleOneRow1_28(curInputRow, outputWidth, output1Row, curKnlChannel+offsetChannel);
-        oneEleOneRow1_28(curInputRow+1, outputWidth, output1Row, curKnlChannel+offsetChannel+1);
-        oneEleOneRow1_28(curInputRow+2, outputWidth, output1Row, curKnlChannel+offsetChannel+2);
+        threeEleThreeRow(curInputRow, outputWidth, output1Row, curKnlChannel+offsetChannel);
         curInputRow+=imgWidth;
     }
     int knlPerRowSize = knlPerChannelSize*channel;
     for(int cInd = 0; cInd < channel; cInd++) {
         int offsetChannel = cInd*knlPerChannelSize;
-        oneEleOneRow1_28(curInputRow, outputWidth, output1Row, curKnlChannel+ knlPerRowSize+ offsetChannel/*kernel[3]*/);
-        oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row, curKnlChannel+ knlPerRowSize+ offsetChannel+1/*kernel[4]*/);
-        oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row, curKnlChannel+ knlPerRowSize+ offsetChannel+2/*kernel[5]*/);
+        threeEleThreeRow(curInputRow, outputWidth, output1Row, curKnlChannel+ knlPerRowSize+ offsetChannel/*kernel[3]*/);
 
-        oneEleOneRow1_28(curInputRow, outputWidth, output1Row + outputWidth, curKnlChannel+offsetChannel);
-        oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row + outputWidth, curKnlChannel+offsetChannel+1);
-        oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row + outputWidth, curKnlChannel+offsetChannel+2);
+        threeEleThreeRow(curInputRow, outputWidth, output1Row + outputWidth, curKnlChannel+offsetChannel);
         curInputRow+=imgWidth;
     }
 
@@ -831,39 +875,27 @@ void numericcal_RowMajor_3Row(float* inputImage, int imgWidth, int imgHeight, in
 
         for(int cInd = 0; cInd < channel; cInd++) {
             int offsetChannel = cInd*knlPerChannelSize;
-            oneEleOneRow1_28(curInputRow, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel);
-            oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row, curKnlChannel + 2*knlPerRowSize+ offsetChannel+ 1);
-            oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row, curKnlChannel + 2*knlPerRowSize+ offsetChannel+ 2);
+            threeEleThreeRow(curInputRow, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel);
 
-            oneEleOneRow1_28(curInputRow, outputWidth, output1Row + outputWidth,curKnlChannel+ knlPerRowSize+ offsetChannel );
-            oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row + outputWidth,curKnlChannel+ knlPerRowSize+ offsetChannel+1);
-            oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row + outputWidth,curKnlChannel+ knlPerRowSize+ offsetChannel+2 );
+            threeEleThreeRow(curInputRow, outputWidth, output1Row + outputWidth,curKnlChannel+ knlPerRowSize+ offsetChannel );
 
-            oneEleOneRow1_28(curInputRow, outputWidth, output1Row + outputWidth*2, curKnlChannel+ offsetChannel );
-            oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row + outputWidth*2,curKnlChannel+ offsetChannel+1 );
-            oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row + outputWidth*2,curKnlChannel+ offsetChannel+2 );
+            threeEleThreeRow(curInputRow, outputWidth, output1Row + outputWidth*2, curKnlChannel+ offsetChannel );
             curInputRow+=imgWidth;
         }
         output1Row+=(outputWidth*numKnls);
     }
     for(int cInd = 0; cInd < channel; cInd++) {
         int offsetChannel = cInd*knlPerChannelSize;
-        oneEleOneRow1_28(curInputRow, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel);
-        oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel+1);
-        oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel+2);
+        threeEleThreeRow(curInputRow, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel);
 
-        oneEleOneRow1_28(curInputRow , outputWidth, output1Row+outputWidth, curKnlChannel+ knlPerRowSize+ offsetChannel);
-        oneEleOneRow1_28(curInputRow +1, outputWidth, output1Row+outputWidth, curKnlChannel+ knlPerRowSize+ offsetChannel+1);
-        oneEleOneRow1_28(curInputRow +2, outputWidth, output1Row+outputWidth, curKnlChannel+ knlPerRowSize+ offsetChannel+2);
+        threeEleThreeRow(curInputRow , outputWidth, output1Row+outputWidth, curKnlChannel+ knlPerRowSize+ offsetChannel);
         curInputRow+=imgWidth;
     }
     output1Row+=(outputWidth*numKnls);
 
     for(int cInd = 0; cInd < channel; cInd++) {
         int offsetChannel = cInd * knlPerChannelSize;
-        oneEleOneRow1_28(curInputRow , outputWidth, output1Row , curKnlChannel+ 2*knlPerRowSize+ offsetChannel);
-        oneEleOneRow1_28(curInputRow  + 1, outputWidth, output1Row ,curKnlChannel+ 2*knlPerRowSize+ offsetChannel+1);
-        oneEleOneRow1_28(curInputRow  + 2, outputWidth, output1Row , curKnlChannel+ 2*knlPerRowSize+ offsetChannel+2);
+        threeEleThreeRow(curInputRow , outputWidth, output1Row , curKnlChannel+ 2*knlPerRowSize+ offsetChannel);
         curInputRow+=imgWidth;
     }
 }
@@ -1706,7 +1738,7 @@ extern "C"
         struct timespec timecount;
         timecount = timer_start();
         for (int repInd = 0; repInd < repeat; repInd++) {
-            /*numericcal_ChannelMajor*/numericcal_RowMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls,
+            /*numericcal_ChannelMajor*/numericcal_RowMajor_3Row(inputImage, imgWidth, imgHeight, channel, kernels, numKnls,
                                     knlWidth,
                                     knlHeight, numericcalOutput, outputWidth,
                                     outputHeight);
@@ -1716,7 +1748,7 @@ extern "C"
 
         repopulate(numericcalOutput, numKnls, outputWidth, outputHeight, 1, FILLZERO);
 
-        numericcal_RowMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls,
+        numericcal_RowMajor_3Row(inputImage, imgWidth, imgHeight, channel, kernels, numKnls,
                                 knlWidth,
                                 knlHeight, numericcalOutput, outputWidth,
                                 outputHeight);
