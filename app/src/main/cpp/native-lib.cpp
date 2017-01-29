@@ -1,8 +1,9 @@
 #define RUNDEVICE
 #define MAXELE 20
+#define MAJOR CHANNEL
 //#define DEBUGNEON
 #define USENEON
-#define CHANNELUNROLLFACTOR 8
+#define CHANNELUNROLLFACTOR 16
 
 #define LOGCATDEBUG
 #include <string>
@@ -412,33 +413,461 @@ void run3by3KernelByRow(float* image, float* kernel, float* output, int imgDIM, 
     oneEleOneRow1(input1Row + offsetIn+2, rowMul,output1Row+offsetOut, kernel[8]);
 }
 */
-
-/* Numericcal -- channel major */
-/*
-void numericcalChannelMajor(float* inputImage, int imgWidth, int imgHeight, int channel,
-                            float* kernels, int numKnls, int knlWidth, int knlHeight,
-                            float* output, int outputWidth, int outputHeight)
+/* dimension of image:
+ *  height, channel, width
+ * dimension of filter
+ *  height,channel,numKernels,width
+ * dimension of output
+ *  height, channel, width
+ */
+void oneEleOneRow1(float* inputRow, int numMul, float* outputRow, float* element)
 {
-    if(outputWidth!=imgWidth-knlWidth+1 || outputHeight!= imgHeight-knlHeight+1)
-        return;
-    // special treatment for top
-
-
-    int outDim = imgDIM-kDIM+1;
-    topRowChannel(image,kernel,output,imgDIM,kDIM,channel);
-    secondRowChannel(image+channel*imgDIM, kernel, output, imgDIM, kDIM, channel);
-    int steadyStateNum = imgDIM-2*(kDIM-1);
-    float* curImagRow = image+channel*imgDIM*2;
-    float* curOutputRow = output;
-    for(int i=0; i<steadyStateNum; i++)
+    float v = *element;
+    for(int i=0; i<numMul; i++)
     {
-        steadyOne2Nine(curImagRow, kernel, curOutputRow, imgDIM, kDIM, channel);
-        curImagRow+=channel*imgDIM;
-        curOutputRow+=outDim;
+        float m = *(inputRow+i);
+        *(outputRow+i) += m*v;
+
     }
-    // last part...
+
 }
-*/
+
+
+inline void oneEleOneRow1_8(float* inputRow, int numMul, float* outputRow, float* element)
+{
+    int num8 = numMul/8;
+    float32x4_t eleDup = vld1q_dup_f32(element);
+    float* curIn = inputRow;
+    float* nextIn = inputRow+8;
+    float* curOut = outputRow;
+    float* nextOut = outputRow+8;
+    for(int i=0; i<num8; i++)
+    {
+        float* curOut1 = curOut;
+        float32x4_t input1 = vld1q_f32(curIn);
+        float32x4_t output1 =  vld1q_f32(curOut1);
+        float* curOut2 = curOut+4;
+        float32x4_t input2 = vld1q_f32(curIn+4);
+        float32x4_t output2 =  vld1q_f32(curOut2);
+
+
+        float32x4_t result1 = vmlaq_f32(output1,eleDup,input1);
+        float32x4_t result2 = vmlaq_f32(output2,eleDup,input2);
+
+
+
+        vst1q_f32(curOut1,result1);
+        vst1q_f32(curOut2,result2);
+
+
+        curIn = nextIn;
+        nextIn += 8;
+        curOut = nextOut;
+        nextOut += 8;
+    }
+    oneEleOneRow1(inputRow+num8*8,numMul%8,outputRow+num8*8,element);
+    //int  doneI = numQ*28;
+    //oneEleOneRow(inputRow+doneI,numMul-doneI,outputRow+doneI,element);
+    //for(int i=numQ*28; i<numMul; i++)
+    //{
+    //    oneEleOneRow(inputRow+i,numMul-i,outputRow+i,element);
+
+    //}
+
+}
+
+
+inline void oneEleOneRow1_16(float* inputRow, int numMul, float* outputRow, float* element)
+{
+    int num16 = numMul/16;
+    float32x4_t eleDup = vld1q_dup_f32(element);
+    float* curIn = inputRow;
+    float* nextIn = inputRow+16;
+    float* curOut = outputRow;
+    float* nextOut = outputRow+16;
+    for(int i=0; i<num16; i++)
+    {
+        float* curOut1 = curOut;
+        float32x4_t input1 = vld1q_f32(curIn);
+        float32x4_t output1 =  vld1q_f32(curOut1);
+        float* curOut2 = curOut+4;
+        float32x4_t input2 = vld1q_f32(curIn+4);
+        float32x4_t output2 =  vld1q_f32(curOut2);
+        float* curOut3 = curOut+8;
+        float32x4_t input3 = vld1q_f32(curIn+8);
+        float32x4_t output3 =  vld1q_f32(curOut3);
+        float* curOut4 = curOut+12;
+        float32x4_t input4 = vld1q_f32(curIn+12);
+        float32x4_t output4 =  vld1q_f32(curOut4);
+
+        float32x4_t result1 = vmlaq_f32(output1,eleDup,input1);
+        float32x4_t result2 = vmlaq_f32(output2,eleDup,input2);
+        float32x4_t result3 = vmlaq_f32(output3,eleDup,input3);
+        float32x4_t result4 = vmlaq_f32(output4,eleDup,input4);
+
+
+        vst1q_f32(curOut1,result1);
+        vst1q_f32(curOut2,result2);
+        vst1q_f32(curOut3,result3);
+        vst1q_f32(curOut4,result4);
+
+        curIn = nextIn;
+        nextIn += 16;
+        curOut = nextOut;
+        nextOut += 16;
+    }
+    oneEleOneRow1_8(inputRow+num16*16,numMul%16,outputRow+num16*16,element);
+    //int  doneI = numQ*28;
+    //oneEleOneRow(inputRow+doneI,numMul-doneI,outputRow+doneI,element);
+    //for(int i=numQ*28; i<numMul; i++)
+    //{
+    //    oneEleOneRow(inputRow+i,numMul-i,outputRow+i,element);
+
+    //}
+
+}
+
+
+void oneEleOneRow1_32(float* inputRow, int numMul, float* outputRow, float* element)
+{
+    int num32 = numMul/32;
+    float32x4_t eleDup = vld1q_dup_f32(element);
+    float* curIn = inputRow;
+    float* nextIn = inputRow+32;
+    float* curOut = outputRow;
+    float* nextOut = outputRow+32;
+    for(int i=0; i<num32; i++)
+    {
+        /*__asm__ volatile(
+        "mov %0, %[nIter]\n\t"
+        "PRFM PLDL1KEEP, [%0]"
+        :
+        : [nIter] "r" (nextIn)
+        );
+        __asm__ volatile(
+        "mov %0, %[nIter]\n\t"
+        "PRFM PLDL1STRM, [%0]"
+        :
+        : [nIter] "r" (nextOut)
+        );*/
+
+        float* curOut1 = curOut;
+        float32x4_t input1 = vld1q_f32(curIn);
+        float32x4_t output1 =  vld1q_f32(curOut1);
+        float* curOut2 = curOut+4;
+        float32x4_t input2 = vld1q_f32(curIn+4);
+        float32x4_t output2 =  vld1q_f32(curOut2);
+        float* curOut3 = curOut+8;
+        float32x4_t input3 = vld1q_f32(curIn+8);
+        float32x4_t output3 =  vld1q_f32(curOut3);
+        float* curOut4 = curOut+12;
+        float32x4_t input4 = vld1q_f32(curIn+12);
+        float32x4_t output4 =  vld1q_f32(curOut4);
+
+        float* curOut5 = curOut+16;
+        float32x4_t input5 = vld1q_f32(curIn+16);
+        float32x4_t output5 =  vld1q_f32(curOut5);
+        float* curOut6 = curOut+20;
+        float32x4_t input6 = vld1q_f32(curIn+20);
+        float32x4_t output6 =  vld1q_f32(curOut6);
+        float* curOut7 = curOut+24;
+        float32x4_t input7 = vld1q_f32(curIn+24);
+        float32x4_t output7 =  vld1q_f32(curOut7);
+        float* curOut8 = curOut+28;
+        float32x4_t input8 = vld1q_f32(curIn+28);
+        float32x4_t output8 =  vld1q_f32(curOut8);
+
+        float32x4_t result1 = vmlaq_f32(output1,eleDup,input1);
+        float32x4_t result2 = vmlaq_f32(output2,eleDup,input2);
+        float32x4_t result3 = vmlaq_f32(output3,eleDup,input3);
+        float32x4_t result4 = vmlaq_f32(output4,eleDup,input4);
+        float32x4_t result5 = vmlaq_f32(output5,eleDup,input5);
+        float32x4_t result6 = vmlaq_f32(output6,eleDup,input6);
+        float32x4_t result7 = vmlaq_f32(output7,eleDup,input7);
+        float32x4_t result8 = vmlaq_f32(output8,eleDup,input8);
+
+        vst1q_f32(curOut1,result1);
+        vst1q_f32(curOut2,result2);
+        vst1q_f32(curOut3,result3);
+        vst1q_f32(curOut4,result4);
+        vst1q_f32(curOut5,result5);
+        vst1q_f32(curOut6,result6);
+        vst1q_f32(curOut7,result7);
+        vst1q_f32(curOut8,result8);
+        curIn = nextIn;
+        nextIn += 32;
+        curOut = nextOut;
+        nextOut += 32;
+    }
+    oneEleOneRow1_16(inputRow+num32*32,numMul%32,outputRow+num32*32,element);
+    //int  doneI = numQ*28;
+    //oneEleOneRow(inputRow+doneI,numMul-doneI,outputRow+doneI,element);
+    //for(int i=numQ*28; i<numMul; i++)
+    //{
+    //    oneEleOneRow(inputRow+i,numMul-i,outputRow+i,element);
+
+    //}
+
+}
+
+
+
+void oneEleOneRow1_28(float* inputRow, int numMul, float* outputRow, float* element)
+{
+    int num28 = numMul/28;
+    float32x4_t eleDup = vld1q_dup_f32(element);
+    float* curIn = inputRow;
+    float* nextIn = inputRow+28;
+    float* curOut = outputRow;
+    float* nextOut = outputRow+28;
+    for(int i=0; i<num28; i++)
+    {
+        /*__asm__ volatile(
+        "mov %0, %[nIter]\n\t"
+        "PRFM PLDL1KEEP, [%0]"
+        :
+        : [nIter] "r" (nextIn)
+        );
+        __asm__ volatile(
+        "mov %0, %[nIter]\n\t"
+        "PRFM PLDL1STRM, [%0]"
+        :
+        : [nIter] "r" (nextOut)
+        );*/
+
+        float* curOut1 = curOut;
+        float32x4_t input1 = vld1q_f32(curIn);
+        float32x4_t output1 =  vld1q_f32(curOut1);
+        float* curOut2 = curOut+4;
+        float32x4_t input2 = vld1q_f32(curIn+4);
+        float32x4_t output2 =  vld1q_f32(curOut2);
+        float* curOut3 = curOut+8;
+        float32x4_t input3 = vld1q_f32(curIn+8);
+        float32x4_t output3 =  vld1q_f32(curOut3);
+        float* curOut4 = curOut+12;
+        float32x4_t input4 = vld1q_f32(curIn+12);
+        float32x4_t output4 =  vld1q_f32(curOut4);
+
+        float* curOut5 = curOut+16;
+        float32x4_t input5 = vld1q_f32(curIn+16);
+        float32x4_t output5 =  vld1q_f32(curOut5);
+        float* curOut6 = curOut+20;
+        float32x4_t input6 = vld1q_f32(curIn+20);
+        float32x4_t output6 =  vld1q_f32(curOut6);
+        float* curOut7 = curOut+24;
+        float32x4_t input7 = vld1q_f32(curIn+24);
+        float32x4_t output7 =  vld1q_f32(curOut7);
+
+
+        float32x4_t result1 = vmlaq_f32(output1,eleDup,input1);
+        float32x4_t result2 = vmlaq_f32(output2,eleDup,input2);
+        float32x4_t result3 = vmlaq_f32(output3,eleDup,input3);
+        float32x4_t result4 = vmlaq_f32(output4,eleDup,input4);
+        float32x4_t result5 = vmlaq_f32(output5,eleDup,input5);
+        float32x4_t result6 = vmlaq_f32(output6,eleDup,input6);
+        float32x4_t result7 = vmlaq_f32(output7,eleDup,input7);
+
+
+        vst1q_f32(curOut1,result1);
+        vst1q_f32(curOut2,result2);
+        vst1q_f32(curOut3,result3);
+        vst1q_f32(curOut4,result4);
+        vst1q_f32(curOut5,result5);
+        vst1q_f32(curOut6,result6);
+        vst1q_f32(curOut7,result7);
+
+        curIn = nextIn;
+        nextIn += 28;
+        curOut = nextOut;
+        nextOut += 28;
+    }
+    oneEleOneRow1_16(inputRow+num28*28,numMul%28,outputRow+num28*28,element);
+    //int  doneI = numQ*28;
+    //oneEleOneRow(inputRow+doneI,numMul-doneI,outputRow+doneI,element);
+    //for(int i=numQ*28; i<numMul; i++)
+    //{
+    //    oneEleOneRow(inputRow+i,numMul-i,outputRow+i,element);
+
+    //}
+
+}
+
+
+
+
+/* dimension of image:
+ *  height, channel, width
+ * dimension of filter
+ *  height,channel,numKernels,width
+ * dimension of output
+ *  height, channel, width
+ */
+void numericcal_RowMajor(float* inputImage, int imgWidth, int imgHeight, int channel,
+                 float* kernels, int numKnls, int knlWidth, int knlHeight,
+                 float* output, int outputWidth, int outputHeight)
+{
+    // only support this configuration for now
+    assert(knlWidth == 3 && knlHeight ==3 && numKnls ==1);
+
+
+    float* output1Row = output;
+    float* input1Row = inputImage;
+    //int rowMul = outputWidth;
+    int offsetIn = 0;
+    int offsetOut = 0;
+
+    int knlPerChannelSize = knlWidth*numKnls;
+    int imgRowSize = channel*imgWidth;
+    float* curInputRow = input1Row;
+    float* curKnlChannel = kernels;
+    // first row
+    for(int cInd = 0; cInd < channel; cInd++) {
+        int offsetChannel = cInd*knlPerChannelSize;
+        oneEleOneRow1_28(curInputRow, outputWidth, output1Row, curKnlChannel+offsetChannel);
+        oneEleOneRow1_28(curInputRow+1, outputWidth, output1Row, curKnlChannel+offsetChannel+1);
+        oneEleOneRow1_28(curInputRow+2, outputWidth, output1Row, curKnlChannel+offsetChannel+2);
+        curInputRow+=imgWidth;
+    }
+    int knlPerRowSize = knlPerChannelSize*channel;
+    for(int cInd = 0; cInd < channel; cInd++) {
+        int offsetChannel = cInd*knlPerChannelSize;
+        oneEleOneRow1_28(curInputRow, outputWidth, output1Row, curKnlChannel+ knlPerRowSize+ offsetChannel/*kernel[3]*/);
+        oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row, curKnlChannel+ knlPerRowSize+ offsetChannel+1/*kernel[4]*/);
+        oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row, curKnlChannel+ knlPerRowSize+ offsetChannel+2/*kernel[5]*/);
+
+        oneEleOneRow1_28(curInputRow, outputWidth, output1Row + outputWidth, curKnlChannel+offsetChannel);
+        oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row + outputWidth, curKnlChannel+offsetChannel+1);
+        oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row + outputWidth, curKnlChannel+offsetChannel+2);
+        curInputRow+=imgWidth;
+    }
+
+    int steadyStateRowNum = imgHeight-2*(knlHeight-1);
+    //steady state
+    for(int k=0; k< steadyStateRowNum ; k++) {
+
+        for(int cInd = 0; cInd < channel; cInd++) {
+            int offsetChannel = cInd*knlPerChannelSize;
+            oneEleOneRow1_28(curInputRow, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel);
+            oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row, curKnlChannel + 2*knlPerRowSize+ offsetChannel+ 1);
+            oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row, curKnlChannel + 2*knlPerRowSize+ offsetChannel+ 2);
+
+            oneEleOneRow1_28(curInputRow, outputWidth, output1Row + outputWidth,curKnlChannel+ knlPerRowSize+ offsetChannel );
+            oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row + outputWidth,curKnlChannel+ knlPerRowSize+ offsetChannel+1);
+            oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row + outputWidth,curKnlChannel+ knlPerRowSize+ offsetChannel+2 );
+
+            oneEleOneRow1_28(curInputRow, outputWidth, output1Row + outputWidth*2, curKnlChannel+ offsetChannel );
+            oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row + outputWidth*2,curKnlChannel+ offsetChannel+1 );
+            oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row + outputWidth*2,curKnlChannel+ offsetChannel+2 );
+            curInputRow+=imgWidth;
+        }
+        output1Row+=(outputWidth*numKnls);
+    }
+    for(int cInd = 0; cInd < channel; cInd++) {
+        int offsetChannel = cInd*knlPerChannelSize;
+        oneEleOneRow1_28(curInputRow, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel);
+        oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel+1);
+        oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel+2);
+
+        oneEleOneRow1_28(curInputRow , outputWidth, output1Row+outputWidth, curKnlChannel+ knlPerRowSize+ offsetChannel);
+        oneEleOneRow1_28(curInputRow +1, outputWidth, output1Row+outputWidth, curKnlChannel+ knlPerRowSize+ offsetChannel+1);
+        oneEleOneRow1_28(curInputRow +2, outputWidth, output1Row+outputWidth, curKnlChannel+ knlPerRowSize+ offsetChannel+2);
+        curInputRow+=imgWidth;
+    }
+    output1Row+=(outputWidth*numKnls);
+
+    for(int cInd = 0; cInd < channel; cInd++) {
+        int offsetChannel = cInd * knlPerChannelSize;
+        oneEleOneRow1_28(curInputRow , outputWidth, output1Row , curKnlChannel+ 2*knlPerRowSize+ offsetChannel);
+        oneEleOneRow1_28(curInputRow  + 1, outputWidth, output1Row ,curKnlChannel+ 2*knlPerRowSize+ offsetChannel+1);
+        oneEleOneRow1_28(curInputRow  + 2, outputWidth, output1Row , curKnlChannel+ 2*knlPerRowSize+ offsetChannel+2);
+        curInputRow+=imgWidth;
+    }
+}
+
+
+// here we do three rows together
+void numericcal_RowMajor_3Row(float* inputImage, int imgWidth, int imgHeight, int channel,
+                         float* kernels, int numKnls, int knlWidth, int knlHeight,
+                         float* output, int outputWidth, int outputHeight)
+{
+    // only support this configuration for now
+    assert(knlWidth == 3 && knlHeight ==3 && numKnls ==1);
+
+
+    float* output1Row = output;
+    float* input1Row = inputImage;
+    //int rowMul = outputWidth;
+    int offsetIn = 0;
+    int offsetOut = 0;
+
+    int knlPerChannelSize = knlWidth*numKnls;
+    int imgRowSize = channel*imgWidth;
+    float* curInputRow = input1Row;
+    float* curKnlChannel = kernels;
+    // first row
+    for(int cInd = 0; cInd < channel; cInd++) {
+        int offsetChannel = cInd*knlPerChannelSize;
+        oneEleOneRow1_28(curInputRow, outputWidth, output1Row, curKnlChannel+offsetChannel);
+        oneEleOneRow1_28(curInputRow+1, outputWidth, output1Row, curKnlChannel+offsetChannel+1);
+        oneEleOneRow1_28(curInputRow+2, outputWidth, output1Row, curKnlChannel+offsetChannel+2);
+        curInputRow+=imgWidth;
+    }
+    int knlPerRowSize = knlPerChannelSize*channel;
+    for(int cInd = 0; cInd < channel; cInd++) {
+        int offsetChannel = cInd*knlPerChannelSize;
+        oneEleOneRow1_28(curInputRow, outputWidth, output1Row, curKnlChannel+ knlPerRowSize+ offsetChannel/*kernel[3]*/);
+        oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row, curKnlChannel+ knlPerRowSize+ offsetChannel+1/*kernel[4]*/);
+        oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row, curKnlChannel+ knlPerRowSize+ offsetChannel+2/*kernel[5]*/);
+
+        oneEleOneRow1_28(curInputRow, outputWidth, output1Row + outputWidth, curKnlChannel+offsetChannel);
+        oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row + outputWidth, curKnlChannel+offsetChannel+1);
+        oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row + outputWidth, curKnlChannel+offsetChannel+2);
+        curInputRow+=imgWidth;
+    }
+
+    int steadyStateRowNum = imgHeight-2*(knlHeight-1);
+    //steady state
+    for(int k=0; k< steadyStateRowNum ; k++) {
+
+        for(int cInd = 0; cInd < channel; cInd++) {
+            int offsetChannel = cInd*knlPerChannelSize;
+            oneEleOneRow1_28(curInputRow, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel);
+            oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row, curKnlChannel + 2*knlPerRowSize+ offsetChannel+ 1);
+            oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row, curKnlChannel + 2*knlPerRowSize+ offsetChannel+ 2);
+
+            oneEleOneRow1_28(curInputRow, outputWidth, output1Row + outputWidth,curKnlChannel+ knlPerRowSize+ offsetChannel );
+            oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row + outputWidth,curKnlChannel+ knlPerRowSize+ offsetChannel+1);
+            oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row + outputWidth,curKnlChannel+ knlPerRowSize+ offsetChannel+2 );
+
+            oneEleOneRow1_28(curInputRow, outputWidth, output1Row + outputWidth*2, curKnlChannel+ offsetChannel );
+            oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row + outputWidth*2,curKnlChannel+ offsetChannel+1 );
+            oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row + outputWidth*2,curKnlChannel+ offsetChannel+2 );
+            curInputRow+=imgWidth;
+        }
+        output1Row+=(outputWidth*numKnls);
+    }
+    for(int cInd = 0; cInd < channel; cInd++) {
+        int offsetChannel = cInd*knlPerChannelSize;
+        oneEleOneRow1_28(curInputRow, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel);
+        oneEleOneRow1_28(curInputRow + 1, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel+1);
+        oneEleOneRow1_28(curInputRow + 2, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel+2);
+
+        oneEleOneRow1_28(curInputRow , outputWidth, output1Row+outputWidth, curKnlChannel+ knlPerRowSize+ offsetChannel);
+        oneEleOneRow1_28(curInputRow +1, outputWidth, output1Row+outputWidth, curKnlChannel+ knlPerRowSize+ offsetChannel+1);
+        oneEleOneRow1_28(curInputRow +2, outputWidth, output1Row+outputWidth, curKnlChannel+ knlPerRowSize+ offsetChannel+2);
+        curInputRow+=imgWidth;
+    }
+    output1Row+=(outputWidth*numKnls);
+
+    for(int cInd = 0; cInd < channel; cInd++) {
+        int offsetChannel = cInd * knlPerChannelSize;
+        oneEleOneRow1_28(curInputRow , outputWidth, output1Row , curKnlChannel+ 2*knlPerRowSize+ offsetChannel);
+        oneEleOneRow1_28(curInputRow  + 1, outputWidth, output1Row ,curKnlChannel+ 2*knlPerRowSize+ offsetChannel+1);
+        oneEleOneRow1_28(curInputRow  + 2, outputWidth, output1Row , curKnlChannel+ 2*knlPerRowSize+ offsetChannel+2);
+        curInputRow+=imgWidth;
+    }
+}
+
 
 inline float* getKernelPoint(float* kernels, int knlWidth, int knlWInd, int knlHInd, int channel, int numKnls)
 {
@@ -839,6 +1268,7 @@ void numericcal_ChannelMajor(float* inputImage, int imgWidth, int imgHeight, int
     for(int topRowInd = 0; topRowInd<knlHeight-1; topRowInd++)
     {
         int outputHOffset = topRowInd-(knlHeight-1);
+
         numericcal_ChannelMajorCore(inputImage+sizePerImgRow*topRowInd, imgWidth, channel,
                                     kernels, numKnls, knlHeight, knlWidth, output, outputWidth,
                                     0, topRowInd+1, outputHOffset);
@@ -850,10 +1280,17 @@ void numericcal_ChannelMajor(float* inputImage, int imgWidth, int imgHeight, int
     float* curOutputRow = output;
     for(int steadyHInd = 0; steadyHInd < steadyStateHeight; steadyHInd++)
     {
+        float* nextIter = curImageRow + sizePerImgRow;
+        __asm__ volatile(
+        "mov %0, %[nIter]\n\t"
+        "PRFM PLDL2KEEP, [%0]"
+        :
+        : [nIter] "r" (nextIter)
+        );
         numericcal_ChannelMajorCore(curImageRow, imgWidth, channel,
                                     kernels, numKnls, knlHeight, knlWidth, curOutputRow, outputWidth,
                                     0, knlHeight, 0);
-        curImageRow += sizePerImgRow;
+        curImageRow = nextIter;
         curOutputRow += outputWidth*numKnls;
     }
     // the bottom part
@@ -865,24 +1302,24 @@ void numericcal_ChannelMajor(float* inputImage, int imgWidth, int imgHeight, int
         curImageRow += sizePerImgRow;
         curOutputRow += outputWidth*numKnls;
     }
-
-
 }
-/* gold model for row major */
-/* dimension of image:
- *  height, channel, width
- *  /
+
+//
 
 
 
-/* gold model for channel major */
-/* dimension of image:
- *   height, width, channel
- * dimension of kernels:
- *   height, width, numKernels, channel
- * dimension of output:
- *   height, width, channel
- * */
+
+
+
+
+
+
+
+
+
+
+
+//----------------------------------------------
 float goldDotProduct(float* inputPixel, float* kernelPixel, int numPoint)
 {
     float result = 0.0;
@@ -893,38 +1330,135 @@ float goldDotProduct(float* inputPixel, float* kernelPixel, int numPoint)
     return result;
 }
 
-void goldSinglePointChannelMajor(float* inputOrigin, int imgWidth, int imgHeight,
-                                 float* curOutputLocation, float* kernels, int knlWidth, int knlHeight, int numKnls,
-                                 int channel)
+/* gold model for row major */
+/* dimension of image:
+ *  height, channel, width
+ * dimension of filter
+ *  height,channel,numKernels,width
+ * dimension of output
+ *  height, channel, width
+ */
+void goldGetInputPointWidthMajor(float* inputImage, int imgWidth, int channel,
+                             int imgWInd, int imgHInd,
+                             float* singleInputAllChannel)
 {
-
-    for(int kHInd = 0; kHInd<knlHeight; kHInd++)
+    for(int cInd = 0; cInd<channel; cInd++)
+        singleInputAllChannel[cInd] = inputImage[imgHInd*imgWidth*channel+cInd*imgWidth+imgWInd];
+}
+void goldGetKernelPointWidthMajor(float* kernels, int knlWidth, int channel, int numKnls,
+                             int knlWInd, int knlHInd, int knlInd,
+                             float* singleKernelAllChannel)
+{
+    for(int cInd = 0; cInd < channel; cInd++)
     {
-        for(int kWInd=0; kWInd<knlWidth; kWInd++)
-        {
-            for(int kInd=0; kInd<numKnls; kInd++)
-            {
-                float* curKernelPoint = kernels+kHInd*knlWidth*numKnls*channel+kWInd*numKnls*channel+kInd*channel;
-                float* curInputPoint = inputOrigin+kHInd*imgWidth*channel+kWInd*channel;
-                *(curOutputLocation+kInd) += goldDotProduct(curInputPoint, curKernelPoint, channel);
-            }
-        }
+        singleKernelAllChannel[cInd] = kernels[knlHInd*channel*numKnls*knlWidth+cInd*numKnls*knlWidth+knlInd*knlWidth+knlWInd];
     }
 }
+float* goldGetOutputPointWidthMajor(float* output, int outputWidth, int numKnls,
+                                int outWInd, int outHInd, int knlInd)
+{
+    return &(output[outHInd*numKnls*outputWidth+knlInd*outputWidth+outWInd]);
+}
 
+
+void goldWidthMajor(float* inputImage, int imgWidth, int imgHeight, int channel,
+                      float* kernels, int numKnls, int knlWidth, int knlHeight,
+                      float* output, int outputWidth, int outputHeight)
+{
+    assert(outputWidth == imgWidth-knlWidth+1);
+    assert(outputHeight == imgHeight-knlHeight+1);
+    float* onePointKnl = new float[channel];
+    float* onePointInput = new float[channel];
+    for (int outHInd = 0; outHInd < outputHeight; outHInd++)
+        for (int outWInd = 0; outWInd < outputWidth; outWInd++) {
+            for (int knlInd = 0; knlInd < numKnls; knlInd++) {
+                float *curOutputLocation =
+                        goldGetOutputPointWidthMajor(output, outputWidth, numKnls, outWInd,
+                                                     outHInd, knlInd);
+                for (int kHInd = 0; kHInd < knlHeight; kHInd++)
+                    for (int kWInd = 0; kWInd < knlWidth; kWInd++) {
+
+
+                        goldGetInputPointWidthMajor(inputImage, imgWidth, channel,
+                                                    outWInd + kWInd, outHInd + kHInd,
+                                                    onePointInput);
+
+                        goldGetKernelPointWidthMajor(kernels, knlWidth, channel, numKnls,
+                                                     kWInd, kHInd, knlInd, onePointKnl);
+                        float curOutput = goldDotProduct(onePointInput, onePointKnl, channel);
+                        *curOutputLocation += curOutput;
+                    }
+            }
+        }
+    delete [] onePointInput;
+    delete [] onePointKnl;
+
+}
+
+
+/* gold model for channel major */
+/* dimension of image:
+ *   height, width, channel
+ * dimension of kernels:
+ *   height, width, numKernels, channel
+ * dimension of output:
+ *   height, width, channel
+ * */
+void goldGetInputPointChannelMajor(float* inputImage, int imgWidth, int channel,
+                                 int imgWInd, int imgHInd,
+                                 float* singleInputAllChannel)
+{
+    for(int cInd = 0; cInd<channel; cInd++)
+        singleInputAllChannel[cInd] = inputImage[imgHInd*imgWidth*channel+imgWInd*channel+cInd];
+}
+void goldGetKernelPointChannelMajor(float* kernels, int knlWidth, int channel, int numKnls,
+                                  int knlWInd, int knlHInd, int knlInd,
+                                  float* singleKernelAllChannel)
+{
+    for(int cInd = 0; cInd < channel; cInd++)
+    {
+        singleKernelAllChannel[cInd] = kernels[knlHInd*channel*numKnls*knlWidth+knlWInd*numKnls*channel+knlInd*channel+cInd];
+    }
+}
+float* goldGetOutputPointChannelMajor(float* output, int outputWidth, int numKnls,
+                                    int outWInd, int outHInd, int knlInd)
+{
+    return &(output[outHInd*numKnls*outputWidth+outWInd*numKnls+knlInd]);
+}
 void goldChannelMajor(float* inputImage, int imgWidth, int imgHeight, int channel,
                       float* kernels, int numKnls, int knlWidth, int knlHeight,
                       float* output, int outputWidth, int outputHeight)
 {
     assert(outputWidth == imgWidth-knlWidth+1);
     assert(outputHeight == imgHeight-knlHeight+1);
+    float* onePointKnl = new float[channel];
+    float* onePointInput = new float[channel];
     for (int outHInd = 0; outHInd < outputHeight; outHInd++)
-        for (int outWInd = 0; outWInd < outputWidth; outWInd++){
-            float *curOutputLocation =
-                    output + outHInd * outputWidth * numKnls + outWInd * numKnls;
-            float *inputOrigin = inputImage + outHInd * imgWidth * channel + outWInd * channel;
-            goldSinglePointChannelMajor(inputOrigin,imgWidth,imgHeight,curOutputLocation,kernels,knlWidth, knlHeight, numKnls, channel);
+        for (int outWInd = 0; outWInd < outputWidth; outWInd++) {
+            for (int knlInd = 0; knlInd < numKnls; knlInd++) {
+                float *curOutputLocation =
+                        goldGetOutputPointChannelMajor(output, outputWidth, numKnls, outWInd,
+                                                     outHInd, knlInd);
+                for (int kHInd = 0; kHInd < knlHeight; kHInd++)
+                    for (int kWInd = 0; kWInd < knlWidth; kWInd++) {
+
+
+                        goldGetInputPointChannelMajor(inputImage, imgWidth, channel,
+                                                    outWInd + kWInd, outHInd + kHInd,
+                                                    onePointInput);
+
+                        goldGetKernelPointChannelMajor(kernels, knlWidth, channel, numKnls,
+                                                     kWInd, kHInd, knlInd, onePointKnl);
+                        float curOutput = goldDotProduct(onePointInput, onePointKnl, channel);
+                        *curOutputLocation += curOutput;
+                    }
+            }
         }
+    delete [] onePointInput;
+    delete [] onePointKnl;
+
+
+
 }
 /* end of golden model for channel major */
 /* compare two array */
@@ -1024,7 +1558,37 @@ int main()
 }
 #endif
 
+/* gold model for row major */
+/* dimension of image:
+ *  height, channel, width
+ * dimension of filter
+ *  height,channel,numKernels,width
+ * dimension of output
+ *  height, channel, width
+ */
 
+void dumpArrayRowMajor(float* arr, int height, int width, int num, int channel)
+{
+    for(int hInd = 0; hInd < height; hInd++)
+    {
+        LOGD("[\t");
+        for(int wInd = 0; wInd < width; wInd++)
+        {
+            for(int kInd = 0; kInd < num; kInd++)
+            {
+                if(kInd!=0)
+                    LOGD(" |");
+                for(int cInd = 0; cInd < channel; cInd++)
+                {
+                    LOGD("%f ",arr[hInd*width*num*channel+cInd*num*channel+kInd*wInd+wInd]);
+                }
+            }
+            if(wInd!=width-1)
+                LOGD(",");
+        }
+        LOGD("\t]\n");
+    }
+}
 
 #ifdef RUNDEVICE
 extern "C"
@@ -1094,8 +1658,11 @@ extern "C"
         numericcal_ChannelMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls, knlWidth,
                                     knlHeight, numericcalOutput, outputWidth,
                                     outputHeight);
+
+
         goldChannelMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls, knlWidth, knlHeight,
                 goldenOutput, outputWidth, outputHeight);
+        dumpArrayRowMajor(goldenOutput, outputHeight, outputWidth, numKnls, channel);
         float norml1dis = norml1DistanceOutput(numericcalOutput,goldenOutput,outputWidth*outputHeight*numKnls);
         float l1dis = l1DistanceOutput(numericcalOutput,goldenOutput,outputWidth*outputHeight*numKnls);
         timecount = timer_start();
@@ -1123,7 +1690,7 @@ extern "C"
         int imgHeight=512;
         int knlWidth=3;
         int knlHeight=3;
-        int channel_upper=64;
+        int channel_upper=32;
         int channel_lower=1;
         int numKnls=1;
 
@@ -1139,7 +1706,7 @@ extern "C"
         struct timespec timecount;
         timecount = timer_start();
         for (int repInd = 0; repInd < repeat; repInd++) {
-            numericcal_ChannelMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls,
+            /*numericcal_ChannelMajor*/numericcal_RowMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls,
                                     knlWidth,
                                     knlHeight, numericcalOutput, outputWidth,
                                     outputHeight);
@@ -1149,13 +1716,16 @@ extern "C"
 
         repopulate(numericcalOutput, numKnls, outputWidth, outputHeight, 1, FILLZERO);
 
-        numericcal_ChannelMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls,
+        numericcal_RowMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls,
                                 knlWidth,
                                 knlHeight, numericcalOutput, outputWidth,
                                 outputHeight);
-        goldChannelMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls, knlWidth,
+        //dumpArrayRowMajor(numericcalOutput, outputHeight, outputWidth, numKnls, channel);
+        goldWidthMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls, knlWidth,
                          knlHeight,
                          goldenOutput, outputWidth, outputHeight);
+       //LOGD("----------------------\n");
+        //dumpArrayRowMajor(goldenOutput, outputHeight, outputWidth, numKnls, channel);
         float norml1dis = norml1DistanceOutput(numericcalOutput, goldenOutput,
                                                outputWidth * outputHeight * numKnls);
         float l1dis = l1DistanceOutput(numericcalOutput, goldenOutput,
@@ -1169,7 +1739,7 @@ extern "C"
                      1, 1, numericcalOutput, outputWidth, outputHeight);
         }
         long long timeSpent2 = timer_end(timecount);
-        LOGD("%d channel: %lld ms v.s. QSML %lld, L1 dist to Golden %f (normalized), %f (absolute)\n", channel, timeSpent/1000000, timeSpent2/1000000,norml1dis,l1dis);
+        LOGD("%d channel:\t%lld ms v.s. QSML\t%lld, L1 dist to Golden %f (normalized), %f (absolute)\n", channel, timeSpent/1000000, timeSpent2/1000000,norml1dis,l1dis);
     }
         deallocate(inputImage);
         deallocate(kernels);
