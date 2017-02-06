@@ -15,6 +15,7 @@
 #ifdef RUNDEVICE
 #include <jni.h>
 #include <qsml.h>
+#include <CL/cl.h>
   #ifdef LOGCATDEBUG
     #include <android/log.h>
 
@@ -1154,8 +1155,8 @@ void numericcal_RowMajor_3Row(float* inputImage, int imgWidth, int imgHeight, in
         curInputRow+=imgWidth;
     }
 }
-
-
+// for armv8 -- 32 q registers
+#define RAWNEONASM
 
 void threeEleThreeRow_3OutMerge(float* inputRow, int numMul, float* outputRow, float* element, int knlPerRowSize)
 {
@@ -1166,28 +1167,25 @@ void threeEleThreeRow_3OutMerge(float* inputRow, int numMul, float* outputRow, f
     threeEleThreeRow(curInputRow, outputWidth, output1Row + outputWidth,element+ knlPerRowSize );
     threeEleThreeRow(curInputRow, outputWidth, output1Row + outputWidth*2, element );*/
 
+    float* curBatch = inputRow;
+    float* curOutBatch = outputRow;
+    int num4 = numMul/4;
+
+#ifndef RAWNEONASM
     //this is sliding window
     // 1. we load whole bunch
     float32x4_t ele0Dup = vld1q_dup_f32(element);
     float32x4_t ele1Dup = vld1q_dup_f32(element+1);
     float32x4_t ele2Dup = vld1q_dup_f32(element+2);
 
-
     float32x4_t ele3Dup = vld1q_dup_f32(element+knlPerRowSize);
     float32x4_t ele4Dup = vld1q_dup_f32(element+knlPerRowSize+1);
     float32x4_t ele5Dup = vld1q_dup_f32(element+knlPerRowSize+2);
 
-
     float32x4_t ele6Dup = vld1q_dup_f32(element+knlPerRowSize*2);
     float32x4_t ele7Dup = vld1q_dup_f32(element+knlPerRowSize*2+1);
     float32x4_t ele8Dup = vld1q_dup_f32(element+knlPerRowSize*2+2);
-
-
-    float* curBatch = inputRow;
-    float* curOutBatch = outputRow;
-    int num4 = numMul/4;
     for(int i = 0; i < num4; i++ ) {
-
         float32x4_t input0 = vld1q_f32(curBatch);
         float32x4_t input1 = vld1q_f32(curBatch + 1);
         float32x4_t input2 = vld1q_f32(curBatch + 2);
@@ -1217,6 +1215,121 @@ void threeEleThreeRow_3OutMerge(float* inputRow, int numMul, float* outputRow, f
         curBatch+=4;
         curOutBatch+=4;
     }
+#else
+    float32x4_t ele0Dup = vld1q_dup_f32(element);
+
+    float32x4_t ele1Dup = vld1q_dup_f32(element+1);
+    float32x4_t ele2Dup = vld1q_dup_f32(element+2);
+
+    float32x4_t ele3Dup = vld1q_dup_f32(element+knlPerRowSize);
+    float32x4_t ele4Dup = vld1q_dup_f32(element+knlPerRowSize+1);
+    float32x4_t ele5Dup = vld1q_dup_f32(element+knlPerRowSize+2);
+
+    float32x4_t ele6Dup = vld1q_dup_f32(element+knlPerRowSize*2);
+    float32x4_t ele7Dup = vld1q_dup_f32(element+knlPerRowSize*2+1);
+    float32x4_t ele8Dup = vld1q_dup_f32(element+knlPerRowSize*2+2);
+    for(int i = 0; i < num4; i++ ) {
+        float32x4_t input0; // = vld1q_f32(curBatch);
+        float32x4_t input1; //= vld1q_f32(curBatch + 1);
+        float32x4_t input2; // = vld1q_f32(curBatch + 2);
+        float* curOutBatch1 = curOutBatch+numMul;
+        float* curOutBatch2 = curOutBatch+2*numMul;
+        float32x4_t output0;// = vld1q_f32(curOutBatch);
+        float32x4_t output1;// = vld1q_f32(curOutBatch+numMul);
+        float32x4_t output2;// = vld1q_f32(curOutBatch+2*numMul);
+
+
+
+
+
+        // good one
+        /*
+        __asm__ volatile(
+        "ldr %q[result0], [%[in]]\n\t"
+        "ldr %q[result1], [%[in], #4]\n\t"
+        "ldr %q[result2], [%[in], #8]\n\t"
+        "ldr %q[oresult0], [%[out0]]\n\t"
+        "ldr %q[oresult1], [%[out1]]\n\t"
+        "ldr %q[oresult2], [%[out2]]\n\t"
+        : [result0] "=w" (input0),[result1] "=w" (input1), [result2] "=w" (input2),
+        [oresult0] "=w" (output0),[oresult1] "=w" (output1), [oresult2] "=w" (output2)
+        : [in] "r" (curBatch),
+        [out0] "r" (curOutBatch), [out1] "r" (curOutBatch1),[out2] "r" (curOutBatch2)
+        );
+        __asm__ volatile(
+
+        "fmla %[re].4s, %[e6d].4s, %[i0].4s\n\t"
+        "fmla %[re].4s, %[e7d].4s, %[i1].4s\n\t"
+        "fmla %[re].4s, %[e8d].4s, %[i2].4s\n\t"
+        "str %q[re], [%[out0]]\n\t"
+        "fmla %[re1].4s, %[e3d].4s, %[i0].4s\n\t"
+        "fmla %[re1].4s, %[e4d].4s, %[i1].4s\n\t"
+        "fmla %[re1].4s, %[e5d].4s, %[i2].4s\n\t"
+        "str %q[re1], [%[out1]]\n\t"
+        "fmla %[re2].4s, %[e0d].4s, %[i0].4s\n\t"
+        "fmla %[re2].4s, %[e1d].4s, %[i1].4s\n\t"
+        "fmla %[re2].4s, %[e2d].4s, %[i2].4s\n\t"
+        "str %q[re2], [%[out2]]\n\t"
+        :
+        : [i0] "w" (input0), [i1] "w" (input1), [i2] "w" (input2),
+        [re] "w" (output0), [e6d] "w" (ele6Dup), [e7d] "w" (ele7Dup), [e8d] "w" (ele8Dup), [out0] "r" (curOutBatch),
+        [re1] "w" (output1), [e3d] "w" (ele3Dup), [e4d] "w" (ele4Dup), [e5d] "w" (ele5Dup),[out1] "r" (curOutBatch1),
+        [re2] "w" (output2), [e0d] "w" (ele0Dup), [e1d] "w" (ele1Dup), [e2d] "w" (ele2Dup),[out2] "r" (curOutBatch2)
+        );
+        */
+        /*__asm__ volatile(
+        "ldr %q[result0], [%[in]]\n\t"
+        "ldr %q[result1], [%[in], #4]\n\t"
+        "ldr %q[result2], [%[in], #8]\n\t"
+        "ldr %q[oresult0], [%[out0]]\n\t"
+        "ldr %q[oresult1], [%[out1]]\n\t"
+        "ldr %q[oresult2], [%[out2]]\n\t"
+        : [result0] "=w" (input0),[result1] "=w" (input1), [result2] "=w" (input2),
+        [oresult0] "=w" (output0),[oresult1] "=w" (output1), [oresult2] "=w" (output2)
+        : [in] "r" (curBatch),
+        [out0] "r" (curOutBatch), [out1] "r" (curOutBatch1),[out2] "r" (curOutBatch2)
+        );*/
+        /*__asm__ volatile(
+        "ldr q0, [%[in]]\n\t"
+        "fmla v3.4s, %[e6d].4s, v0.4s\n\t"
+        :
+        :[in] "r" (curBatch),[e6d] "w" (ele6Dup)
+        :"v0", "v3"
+        );*/
+
+        __asm__ volatile(
+        "ldr q0, [%[in]]\n\t"
+        "ldr q1, [%[in], #4]\n\t"
+        "ldr q2, [%[in], #8]\n\t"
+        "ldr q3, [%[out0]]\n\t"
+        "ldr q4, [%[out1]]\n\t"
+        "ldr q5, [%[out2]]\n\t"
+        "fmla v3.4s, %[e6d].4s, v0.4s\n\t"
+        "fmla v3.4s, %[e7d].4s, v1.4s\n\t"
+        "fmla v3.4s, %[e8d].4s, v2.4s\n\t"
+        "str q3, [%[out0]]\n\t"
+        "fmla v4.4s, %[e3d].4s, v0.4s\n\t"
+        "fmla v4.4s, %[e4d].4s, v1.4s\n\t"
+        "fmla v4.4s, %[e5d].4s, v2.4s\n\t"
+        "str q4, [%[out1]]\n\t"
+        "fmla v5.4s, %[e0d].4s, v0.4s\n\t"
+        "fmla v5.4s, %[e1d].4s, v1.4s\n\t"
+        "fmla v5.4s, %[e2d].4s, v2.4s\n\t"
+        "str q5, [%[out2]]\n\t"
+        :
+        :[in] "r" (curBatch),
+         [e6d] "w" (ele6Dup), [e7d] "w" (ele7Dup), [e8d] "w" (ele8Dup), [out0] "r" (curOutBatch),
+         [e3d] "w" (ele3Dup), [e4d] "w" (ele4Dup), [e5d] "w" (ele5Dup),[out1] "r" (curOutBatch1),
+         [e0d] "w" (ele0Dup), [e1d] "w" (ele1Dup), [e2d] "w" (ele2Dup),[out2] "r" (curOutBatch2)
+        :"v1","v2","v3","v4","v5","v0"
+        );
+
+
+
+        curBatch+=4;
+        curOutBatch+=4;
+    }
+#endif
 
     int done = num4*4;
     curBatch = inputRow+done;
@@ -1253,6 +1366,9 @@ void threeEleThreeRow_3OutMerge(float* inputRow, int numMul, float* outputRow, f
     oneEleOneRow1_28(inputRow+1, numMul, outputRow, element+1);
     oneEleOneRow1_28(inputRow+2, numMul, outputRow, element+2);*/
 }
+
+
+
 
 void numericcal_RowMajor_3Row_3OutMergeSteady(float* inputImage, int imgWidth, int imgHeight, int channel,
                               float* kernels, int numKnls, int knlWidth, int knlHeight,
@@ -1315,6 +1431,232 @@ void numericcal_RowMajor_3Row_3OutMergeSteady(float* inputImage, int imgWidth, i
     }
 }
 
+
+
+void threeEleThreeRow_3OutMergeEvenBetter(float* inputRow, int numMul, float* outputRow, float* element, int knlPerRowSize)
+{
+    /*float* curInputRow = inputRow;
+    int outputWidth = numMul;
+    float* output1Row = outputRow;
+    threeEleThreeRow(curInputRow, outputWidth, output1Row, element+ 2*knlPerRowSize);
+    threeEleThreeRow(curInputRow, outputWidth, output1Row + outputWidth,element+ knlPerRowSize );
+    threeEleThreeRow(curInputRow, outputWidth, output1Row + outputWidth*2, element );*/
+
+    //this is sliding window
+    // 1. we load whole bunch
+    float32x4_t ele0Dup = vld1q_dup_f32(element);
+    float32x4_t ele1Dup = vld1q_dup_f32(element+1);
+    float32x4_t ele2Dup = vld1q_dup_f32(element+2);
+
+
+    float32x4_t ele3Dup = vld1q_dup_f32(element+knlPerRowSize);
+    float32x4_t ele4Dup = vld1q_dup_f32(element+knlPerRowSize+1);
+    float32x4_t ele5Dup = vld1q_dup_f32(element+knlPerRowSize+2);
+
+
+    float32x4_t ele6Dup = vld1q_dup_f32(element+knlPerRowSize*2);
+    float32x4_t ele7Dup = vld1q_dup_f32(element+knlPerRowSize*2+1);
+    float32x4_t ele8Dup = vld1q_dup_f32(element+knlPerRowSize*2+2);
+
+
+    float* curBatch = inputRow;
+    float* curOutBatch = outputRow;
+    int num16 = numMul/16;
+    for(int i = 0; i < num16; i++ ) {
+
+        float32x4x4_t input0_4 =  vld4q_f32(curBatch);
+        float32x4x4_t input1_4 = vld4q_f32(curBatch + 1);
+        float32x4x4_t input2_4 = vld4q_f32(curBatch + 2);
+
+        float32x4x4_t output0_4 =  vld4q_f32(curOutBatch);
+        float32x4x4_t output1_4 = vld4q_f32(curOutBatch+numMul);
+        float32x4x4_t output2_4 = vld4q_f32(curOutBatch+2*numMul);
+
+        float32x4x4_t result1;
+        result1.val[0] = vmlaq_f32(output0_4.val[0], ele6Dup, input0_4.val[0]);
+        result1.val[1] = vmlaq_f32(output0_4.val[1], ele6Dup, input0_4.val[1]);
+        result1.val[2] = vmlaq_f32(output0_4.val[2], ele6Dup, input0_4.val[2]);
+        result1.val[3] = vmlaq_f32(output0_4.val[3], ele6Dup, input0_4.val[3]);
+
+        result1.val[0] = vmlaq_f32(result1.val[0], ele7Dup, input1_4.val[0]);
+        result1.val[1] = vmlaq_f32(result1.val[1], ele7Dup, input1_4.val[1]);
+        result1.val[2] = vmlaq_f32(result1.val[2], ele7Dup, input1_4.val[2]);
+        result1.val[3] = vmlaq_f32(result1.val[3], ele7Dup, input1_4.val[3]);
+
+        result1.val[0] = vmlaq_f32(result1.val[0], ele8Dup, input2_4.val[0]);
+        result1.val[1] = vmlaq_f32(result1.val[1], ele8Dup, input2_4.val[1]);
+        result1.val[2] = vmlaq_f32(result1.val[2], ele8Dup, input2_4.val[2]);
+        result1.val[3] = vmlaq_f32(result1.val[3], ele8Dup, input2_4.val[3]);
+
+
+
+        //float32x4_t input0 = vld1q_f32(curBatch);
+        //float32x4_t input1 = vld1q_f32(curBatch + 1);
+        //float32x4_t input2 = vld1q_f32(curBatch + 2);
+
+        //float32x4_t output0 = vld1q_f32(curOutBatch);
+        //float32x4_t output1 = vld1q_f32(curOutBatch+numMul);
+        //float32x4_t output2 = vld1q_f32(curOutBatch+2*numMul);
+
+        //float32x4_t result1;
+        //result1 = vmlaq_f32(output0, ele6Dup, input0);
+        //result1 = vmlaq_f32(result1, ele7Dup, input1);
+        //result1 = vmlaq_f32(result1, ele8Dup, input2);
+        vst4q_f32(curOutBatch, result1);
+
+
+        float32x4x4_t result2_4;
+        result2_4.val[0] = vmlaq_f32(output1_4.val[0], ele3Dup, input0_4.val[0]);
+        result2_4.val[1] = vmlaq_f32(output1_4.val[1], ele3Dup, input0_4.val[1]);
+        result2_4.val[2] = vmlaq_f32(output1_4.val[2], ele3Dup, input0_4.val[2]);
+        result2_4.val[3] = vmlaq_f32(output1_4.val[3], ele3Dup, input0_4.val[3]);
+
+        result2_4.val[0] = vmlaq_f32(result2_4.val[0], ele4Dup, input1_4.val[0]);
+        result2_4.val[1] = vmlaq_f32(result2_4.val[1], ele4Dup, input1_4.val[1]);
+        result2_4.val[2] = vmlaq_f32(result2_4.val[2], ele4Dup, input1_4.val[2]);
+        result2_4.val[3] = vmlaq_f32(result2_4.val[3], ele4Dup, input1_4.val[3]);
+
+        result2_4.val[0] = vmlaq_f32(result2_4.val[0], ele5Dup, input2_4.val[0]);
+        result2_4.val[1] = vmlaq_f32(result2_4.val[1], ele5Dup, input2_4.val[1]);
+        result2_4.val[2] = vmlaq_f32(result2_4.val[2], ele5Dup, input2_4.val[2]);
+        result2_4.val[3] = vmlaq_f32(result2_4.val[3], ele5Dup, input2_4.val[3]);
+
+        vst4q_f32(curOutBatch+numMul, result2_4);
+
+        /*float32x4_t result2;
+        result2 = vmlaq_f32(output1, ele3Dup, input0);
+        result2 = vmlaq_f32(result2, ele4Dup, input1);
+        result2 = vmlaq_f32(result2, ele5Dup, input2);
+        vst1q_f32(curOutBatch+numMul, result2);*/
+
+        float32x4x4_t result3_4;
+        result3_4.val[0] = vmlaq_f32(output2_4.val[0], ele0Dup, input0_4.val[0]);
+        result3_4.val[1] = vmlaq_f32(output2_4.val[1], ele0Dup, input0_4.val[1]);
+        result3_4.val[2] = vmlaq_f32(output2_4.val[2], ele0Dup, input0_4.val[2]);
+        result3_4.val[3] = vmlaq_f32(output2_4.val[3], ele0Dup, input0_4.val[3]);
+
+        result3_4.val[0] = vmlaq_f32(result3_4.val[0], ele1Dup, input1_4.val[0]);
+        result3_4.val[1] = vmlaq_f32(result3_4.val[1], ele1Dup, input1_4.val[1]);
+        result3_4.val[2] = vmlaq_f32(result3_4.val[2], ele1Dup, input1_4.val[2]);
+        result3_4.val[3] = vmlaq_f32(result3_4.val[3], ele1Dup, input1_4.val[3]);
+
+        result3_4.val[0] = vmlaq_f32(result3_4.val[0], ele2Dup, input2_4.val[0]);
+        result3_4.val[1] = vmlaq_f32(result3_4.val[1], ele2Dup, input2_4.val[1]);
+        result3_4.val[2] = vmlaq_f32(result3_4.val[2], ele2Dup, input2_4.val[2]);
+        result3_4.val[3] = vmlaq_f32(result3_4.val[3], ele2Dup, input2_4.val[3]);
+        vst4q_f32(curOutBatch+numMul*2, result3_4);
+
+
+
+        /*float32x4_t result3;
+        result3 = vmlaq_f32(output2, ele0Dup, input0);
+        result3 = vmlaq_f32(result3, ele1Dup, input1);
+        result3 = vmlaq_f32(result3, ele2Dup, input2);
+        vst1q_f32(curOutBatch+numMul*2, result3);*/
+
+        curBatch+=16;
+        curOutBatch+=16;
+    }
+
+    int done = num16*16;
+    curBatch = inputRow+done;
+    curOutBatch = outputRow+done;
+
+
+    float ele0 = *element;
+    float ele1 = *(element+1);
+    float ele2 = *(element+2);
+
+    float ele3 = *(element+knlPerRowSize);
+    float ele4 = *(element+knlPerRowSize+1);
+    float ele5 = *(element+knlPerRowSize+2);
+
+    float ele6 = *(element+2*knlPerRowSize);
+    float ele7 = *(element+2*knlPerRowSize+1);
+    float ele8 = *(element+2*knlPerRowSize+2);
+
+
+    for(int i = 0; i < numMul%16; i++)
+    {
+        float m0 = *(curBatch+i);
+        float m1 = *(curBatch+i+1);
+        float m2 = *(curBatch+i+2);
+        *(curOutBatch+i) += m0*ele6+m1*ele7+m2*ele8;
+        *(curOutBatch+numMul+i) += m0*ele3+m1*ele4+m2*ele5;
+        *(curOutBatch+2*numMul+i) += m0*ele0+m1*ele1+m2*ele2;
+    }
+
+
+
+
+    /*oneEleOneRow1_28(inputRow, numMul, outputRow, element);
+    oneEleOneRow1_28(inputRow+1, numMul, outputRow, element+1);
+    oneEleOneRow1_28(inputRow+2, numMul, outputRow, element+2);*/
+}
+
+
+
+void numericcal_RowMajor_3Row_3OutMergeSteadyEvenBetter(float* inputImage, int imgWidth, int imgHeight, int channel,
+                                              float* kernels, int numKnls, int knlWidth, int knlHeight,
+                                              float* output, int outputWidth, int outputHeight)
+{
+    // only support this configuration for now
+    assert(knlWidth == 3 && knlHeight ==3 && numKnls ==1);
+
+
+    float* output1Row = output;
+    float* input1Row = inputImage;
+    //int rowMul = outputWidth;
+    int offsetIn = 0;
+    int offsetOut = 0;
+
+    int knlPerChannelSize = knlWidth*numKnls;
+    int imgRowSize = channel*imgWidth;
+    float* curInputRow = input1Row;
+    float* curKnlChannel = kernels;
+    int knlPerRowSize = knlPerChannelSize*channel;
+    // first row
+
+    for(int cInd = 0; cInd < channel; cInd++) {
+        int offsetChannel = cInd*knlPerChannelSize;
+        threeEleThreeRow(curInputRow, outputWidth, output1Row, curKnlChannel+offsetChannel);
+        curInputRow+=imgWidth;
+    }
+
+    for(int cInd = 0; cInd < channel; cInd++) {
+        int offsetChannel = cInd*knlPerChannelSize;
+        threeEleThreeRow(curInputRow, outputWidth, output1Row, curKnlChannel+ knlPerRowSize+ offsetChannel);
+
+        threeEleThreeRow(curInputRow, outputWidth, output1Row + outputWidth, curKnlChannel+offsetChannel);
+        curInputRow+=imgWidth;
+    }
+    int steadyStateRowNum = imgHeight-2*(knlHeight-1);
+    //steady state
+    for(int k=0; k< steadyStateRowNum ; k++) {
+
+        for(int cInd = 0; cInd < channel; cInd++) {
+            int offsetChannel = cInd*knlPerChannelSize;
+            threeEleThreeRow_3OutMergeEvenBetter(curInputRow, outputWidth, output1Row, curKnlChannel+offsetChannel, knlPerRowSize);
+
+            curInputRow+=imgWidth;
+        }
+        output1Row+=(outputWidth*numKnls);
+    }
+    for(int cInd = 0; cInd < channel; cInd++) {
+        int offsetChannel = cInd*knlPerChannelSize;
+        threeEleThreeRow(curInputRow, outputWidth, output1Row, curKnlChannel+ 2*knlPerRowSize+ offsetChannel);
+
+        threeEleThreeRow(curInputRow , outputWidth, output1Row+outputWidth, curKnlChannel+ knlPerRowSize+ offsetChannel);
+        curInputRow+=imgWidth;
+    }
+    output1Row+=(outputWidth*numKnls);
+
+    for(int cInd = 0; cInd < channel; cInd++) {
+        int offsetChannel = cInd * knlPerChannelSize;
+        threeEleThreeRow(curInputRow , outputWidth, output1Row , curKnlChannel+ 2*knlPerRowSize+ offsetChannel);
+        curInputRow+=imgWidth;
+    }
+}
 
 
 
@@ -2040,6 +2382,157 @@ void dumpArrayRowMajor(float* arr, int height, int width, int num, int channel)
     }
 }
 
+#define CURCHANNEL 8
+#define CURKNLW 3
+#define CURKNLH 3
+void coreMM2(float* A, float* B, float* C)
+{
+    float32x4_t krow[8];
+    for(int i=0; i<8; i++) {
+        krow[i] = vld1q_f32(B+i*4);
+    }
+    float32x4_t orow[4];
+    for(int i=0; i<4; i++) {
+        orow[i] = vld1q_f32(C+i*4);
+    }
+    float32x4_t val0;
+    float32x4_t val1;
+    float32x4_t val2;
+    float32x4_t val3;
+    int ARowOffset = CURCHANNEL;
+    for(int i =0; i<8; i++) {
+        val0 = vld1q_dup_f32(A+i); // 13Q
+        val1 = vld1q_dup_f32(A+ARowOffset+i); // 14Q
+        val2 = vld1q_dup_f32(A+ARowOffset*2+i); // 15Q
+        val3 = vld1q_dup_f32(A+ARowOffset*3+i); // 16Q
+        orow[0] = vmlaq_f32(orow[0], val0, krow[i]); // A1stRow1st times Krow1
+        orow[1] = vmlaq_f32(orow[1], val1, krow[i]); // A1stRow1st times Krow1
+        orow[2] = vmlaq_f32(orow[2], val2, krow[i]); // A1stRow1st times Krow1
+        orow[3] = vmlaq_f32(orow[3], val3, krow[i]); // A1stRow1st times Krow1
+    }
+    for(int i=0; i<4; i++) {
+        vst1q_f32(C+i*4, orow[i]);
+    }
+}
+
+
+void convolve(float* img, int imgW, int channel, float* kernel, int knlHeight, int knlWidth,float* result, int resultW, int resultH)
+{
+
+    for(int i =0; i<resultH; i++)
+    {
+        for(int j = 0; j<resultW; j+=4) {
+            float *imgH = &img[CURCHANNEL*resultH*imgW];
+            // kernel location
+            for(int ki = 0; ki < knlHeight; ki++)
+                for(int kj = 0; kj < knlWidth; kj++)
+                {
+                    imgH += (ki*knlWidth+kj)*CURCHANNEL;
+                    float* out = result+i*resultW+j;
+                    coreMM2(imgH, kernel, out);
+                }
+        }
+    }
+
+}
+
+
+
+void coreMM(float* A, float* B, float* C)
+{
+    // A is essentially the beginning of a pixel (whole 8 channel in that pixel)
+    // B points to beginning of a row in the kernel matrix (72 rows each with 4 entry -- 4 filters, 8 channel x 9 points )
+    // C points to the beginning of a row in the output matrix (OWxOH rows each with 4 entry)
+    // we block it such that, we will use 8 numbers from A
+    // 8 rows from B, to get 1 row (actually 1/9) row for C
+    /*LOGD("%f,%f,%f,%f ----", B[0],B[1],B[2],B[3]);
+    float st[4];
+
+    float32x4x4_t krow0_to_3 = vld4q_f32(B);
+    vst1q_f32(st,krow0_to_3.val[0] );
+    LOGD("%f,%f,%f,%f ----", st[0],st[1],st[2],st[3]);
+
+
+    float32x4x4_t krow4_to_7 = vld4q_f32(B+16); // used 8Q
+
+    float32x4x4_t orow0_to_3 = vld4q_f32(C); //12Q; -- 4 row of output
+    float32x4_t val0;
+    float32x4_t val1;
+    float32x4_t val2;
+    float32x4_t val3;
+    float a[4];
+    float b[4];
+    for(int i =0; i<4; i++) {
+        val0 = vld1q_dup_f32(A+i); // 13Q
+        val1 = vld1q_dup_f32(A+8+i); // 14Q
+        val2 = vld1q_dup_f32(A+16+i); // 15Q
+        val3 = vld1q_dup_f32(A+24+i); // 16Q
+        orow0_to_3.val[0] = vmlaq_f32(orow0_to_3.val[0], val0, krow0_to_3.val[0+i]); // A1stRow1st times Krow1
+        orow0_to_3.val[1] = vmlaq_f32(orow0_to_3.val[1], val1, krow0_to_3.val[0+i]); // A2ndRow1st times Krow1
+        orow0_to_3.val[2] = vmlaq_f32(orow0_to_3.val[2], val2, krow0_to_3.val[0+i]); // A3rdRow1st times Krow1
+        orow0_to_3.val[3] = vmlaq_f32(orow0_to_3.val[3], val3, krow0_to_3.val[0+i]); // A4thRow1st times Krow1
+
+        vst1q_f32(b,krow0_to_3.val[0+i] );
+        LOGD("%f, %f, %f, %f",b[0],b[1],b[2],b[3]);
+        vst1q_f32(a,orow0_to_3.val[0] );
+        LOGD("%f, %f, %f, %f",a[0],a[1],a[2],a[3]);
+    }
+
+    for(int i =0; i<4; i++) {
+        val0 = vld1q_dup_f32(A+4+i);
+        val1 = vld1q_dup_f32(A+12+i);
+        val2 = vld1q_dup_f32(A+20+i);
+        val3 = vld1q_dup_f32(A+28+i);
+        orow0_to_3.val[0] = vmlaq_f32(orow0_to_3.val[0], val0, krow4_to_7.val[0+i]); // A1stRow1st times Krow1
+        orow0_to_3.val[1] = vmlaq_f32(orow0_to_3.val[1], val1, krow4_to_7.val[0+i]); // A2ndRow1st times Krow1
+        orow0_to_3.val[2] = vmlaq_f32(orow0_to_3.val[2], val2, krow4_to_7.val[0+i]); // A3rdRow1st times Krow1
+        orow0_to_3.val[3] = vmlaq_f32(orow0_to_3.val[3], val3, krow4_to_7.val[0+i]); // A4thRow1st times Krow1
+        vst1q_f32(a,orow0_to_3.val[0] );
+        LOGD("%f, %f, %f, %f",a[0],a[1],a[2],a[3]);
+    }
+    // store back?
+    vst4q_f32(C,orow0_to_3);
+    */
+}
+// let's test the core
+void testCore()
+{
+    float* A = allocateAndPopulate(1,8,4,1,FILLPOSITION);
+    float* B = allocateAndPopulate(1,4,8,1,FILLPOSITION);
+    float* golden = allocateAndPopulate(1,4,4,1,FILLZERO);
+    float* test = allocateAndPopulate(1,4,4,1,FILLZERO);
+
+        /*LOGD("%f, %f, %f, %f, %f, %f, %f, %f,A\n", A[0],A[1],A[2],A[3],A[4],A[5],A[6],A[7]);
+        for(int j=0; j<8; j++)
+        {
+            LOGD("%f",B[j]);
+        }*/
+
+    for(int i=0; i<4; i++)
+        for(int j=0; j<4; j++)
+            for(int k=0; k<8; k++)
+            {
+                golden[i*4+j] += A[i*8+k]*B[k*4+j];
+            }
+    coreMM2(A,B,test);
+    LOGD("check");
+    for(int i=0; i<4; i++)
+        for(int j=0; j<4; j++)
+        {
+            float check = golden[i*4+j]-test[i*4+j];
+            if(check>0.001 || check < -0.001)
+                LOGD("%d, %d %f, %f, different", i,j,golden[i*4+j],test[i*4+j] );
+        }
+    LOGD("done");
+}
+
+
+
+
+
+
+
+
 #ifdef RUNDEVICE
 extern "C"
 {
@@ -2130,8 +2623,150 @@ extern "C"
         rtStringStream<<timeSpent/1000000<< "ms v.s. QSML"<<timeSpent2/1000000<<", L1 dist to Golden "<<norml1dis<<"(normalized),"<<l1dis<<"(absolute)\n";
         return env->NewStringUTF(rtStringStream.str().c_str());
     }
-    void
-    Java_com_numericcal_convolutionbenchmark_MainActivity_launchConvNumericcalDummy(
+    void Java_com_numericcal_convolutionbenchmark_MainActivity_launchConvNumericcalClProbe(
+            JNIEnv *env,
+            jobject)
+    {
+        //cl_device_id device_id = NULL;
+        //cl_context context = NULL;
+        //cl_command_queue command_queue = NULL;
+        //cl_mem memobj = NULL;
+        //cl_program program = NULL;
+        //cl_kernel kernel = NULL;
+        //cl_platform_id platform_id = NULL;
+        //cl_uint ret_num_devices;
+        //cl_uint ret_num_platforms;
+        cl_int ret;
+        /*LOGD("%d platform num\n", ret_num_platforms);
+         ret = clGetPlatformIDs(1, &platform_id, &ret_num_platforms);
+         //ret = clGetDeviceIDs(platform_id, CL_DEVICE_TYPE_DEFAULT, 1, &device_id, &ret_num_devices);
+         LOGD("%d platform num\n", ret_num_platforms);*/
+        cl_platform_id platforms[10];
+        cl_uint numPlats;
+        clGetPlatformIDs(1,platforms,&numPlats);
+        int i;
+        LOGD("-----------------------------------------------------------------\n");
+        for(i=0;i<numPlats;i++){
+            char platname[100];
+            clGetPlatformInfo(platforms[i],CL_PLATFORM_NAME,sizeof(platname),platname,NULL);
+            LOGD("platform:\n");
+            LOGD(platname);
+            char platversion[100];
+            clGetPlatformInfo(platforms[i],CL_PLATFORM_VERSION,sizeof(platversion),platversion,NULL);
+            LOGD("platform version:\n");
+            LOGD(platversion);
+
+            cl_device_id devices[10];
+            cl_uint ndevices;
+            clGetDeviceIDs(platforms[i],CL_DEVICE_TYPE_ALL,10,devices,&ndevices);
+            int j;
+
+            for(j=0;j<ndevices;j++){
+                char devname[100];
+                clGetDeviceInfo(devices[j],CL_DEVICE_NAME,sizeof(devname),devname,NULL);
+                LOGD("Devices Name:\n");
+                LOGD("\t%s",devname);
+
+                char devversion[100];
+                clGetDeviceInfo(devices[j],CL_DEVICE_VERSION,sizeof(devversion),devversion,NULL);
+                LOGD("Devices Version:\n");
+                LOGD("\t%s",devversion);
+
+                char devext[1000];
+                clGetDeviceInfo(devices[j],CL_DEVICE_EXTENSIONS,sizeof(devext),devext,NULL);
+                LOGD("\t%s",devext);
+                cl_ulong globalMemCacheSize;
+                clGetDeviceInfo(devices[j],CL_DEVICE_GLOBAL_MEM_CACHE_SIZE,sizeof(globalMemCacheSize),&globalMemCacheSize,NULL);
+                LOGD("GlobalMemCacheSize:");
+                LOGD("\t%ld", globalMemCacheSize);
+                cl_uint globalMemCacheLineSize;
+                clGetDeviceInfo(devices[j],CL_DEVICE_GLOBAL_MEM_CACHELINE_SIZE,sizeof(globalMemCacheLineSize),&globalMemCacheLineSize,NULL);
+                LOGD("GlobalMemCacheLineSize:");
+                LOGD("%\tld", globalMemCacheLineSize);
+                cl_ulong globalMemSize;
+                clGetDeviceInfo(devices[j],CL_DEVICE_GLOBAL_MEM_SIZE,sizeof(globalMemSize),&globalMemSize,NULL);
+                LOGD("GlobalMemSize:");
+                LOGD("\t%ld", globalMemSize);
+
+                cl_bool imgSupport;
+                clGetDeviceInfo(devices[j],CL_DEVICE_IMAGE_SUPPORT,sizeof(imgSupport),&imgSupport,NULL);
+                LOGD("Image Support:");
+                LOGD("\t%s", imgSupport?"true":"false");
+                size_t imgMaxHeight;
+                clGetDeviceInfo(devices[j],CL_DEVICE_IMAGE2D_MAX_HEIGHT,sizeof(imgMaxHeight),&imgMaxHeight,NULL);
+                LOGD("2DImage Max Height:");
+                LOGD("\t%d", imgMaxHeight);
+                size_t imgMaxWidth;
+                clGetDeviceInfo(devices[j],CL_DEVICE_IMAGE2D_MAX_WIDTH,sizeof(imgMaxWidth),&imgMaxWidth,NULL);
+                LOGD("2DImage Max Width:");
+                LOGD("\t%d", imgMaxWidth);
+
+                size_t imgMaxHeight3D;
+                clGetDeviceInfo(devices[j],CL_DEVICE_IMAGE3D_MAX_HEIGHT,sizeof(imgMaxHeight3D),&imgMaxHeight3D,NULL);
+                LOGD("3DImage Max Height:");
+                LOGD("\t%d", imgMaxHeight3D);
+                size_t imgMaxWidth3D;
+                clGetDeviceInfo(devices[j],CL_DEVICE_IMAGE3D_MAX_WIDTH,sizeof(imgMaxWidth3D),&imgMaxWidth3D,NULL);
+                LOGD("3DImage Max Width:");
+                LOGD("\t%d", imgMaxWidth3D);
+                size_t imgMaxDepth3D;
+                clGetDeviceInfo(devices[j],CL_DEVICE_IMAGE3D_MAX_DEPTH,sizeof(imgMaxDepth3D),&imgMaxDepth3D,NULL);
+                LOGD("3DImage Max Depth:");
+                LOGD("\t%d", imgMaxDepth3D);
+                cl_ulong loclMemSize;
+                clGetDeviceInfo(devices[j],CL_DEVICE_LOCAL_MEM_SIZE,sizeof(loclMemSize),&loclMemSize,NULL);
+                LOGD("Local Mem Size:");
+                LOGD("\t%ld", loclMemSize);
+
+                cl_device_local_mem_type lmt;
+                clGetDeviceInfo(devices[j],CL_DEVICE_LOCAL_MEM_TYPE,sizeof(lmt),&lmt,NULL);
+                LOGD("Local Mem Type:");
+                LOGD("\t%s", lmt==CL_LOCAL?"dedecated local":"global");
+
+                cl_uint freq;
+                clGetDeviceInfo(devices[j],CL_DEVICE_MAX_CLOCK_FREQUENCY,sizeof(freq),&freq,NULL);
+                LOGD("Max Clock Freq:");
+                LOGD("\t%dMHz", freq);
+                cl_uint maxComputeUnit;
+                clGetDeviceInfo(devices[j],CL_DEVICE_MAX_COMPUTE_UNITS,sizeof(maxComputeUnit),&maxComputeUnit,NULL);
+                LOGD("Max Compute Unit:");
+                LOGD("\t%d", maxComputeUnit);
+
+                cl_ulong constBufSize;
+                clGetDeviceInfo(devices[j],CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE,sizeof(constBufSize),&constBufSize,NULL);
+                LOGD("Max Const Buffer Size:");
+                LOGD("\t%d", constBufSize);
+
+                cl_ulong maxMemAlloc;
+                clGetDeviceInfo(devices[j],CL_DEVICE_MAX_MEM_ALLOC_SIZE,sizeof(maxMemAlloc),&maxMemAlloc,NULL);
+                LOGD("Max Memory Alloc Size:");
+                LOGD("\t%d", maxMemAlloc);
+
+
+                size_t maxWGSize;
+                clGetDeviceInfo(devices[j],CL_DEVICE_MAX_WORK_GROUP_SIZE,sizeof(maxWGSize),&maxWGSize,NULL);
+                LOGD("Max Work Group Size:");
+                LOGD("\t%d", maxWGSize);
+
+
+
+
+
+
+
+
+
+            }
+        }
+
+    }
+
+
+
+
+
+    // the way to do it is to have multiple filters interleaving each other
+    void Java_com_numericcal_convolutionbenchmark_MainActivity_launchConvQSMLTryFilters(
             JNIEnv *env,
             jobject)
     {
@@ -2140,8 +2775,163 @@ extern "C"
         int imgHeight=512;
         int knlWidth=3;
         int knlHeight=3;
-        int channel_upper=72;
-        int channel_lower=65;
+
+        int channel= 8;
+        int numKnls = 4;
+
+        int outputWidth = imgWidth-knlWidth+1;
+        int outputHeight = imgHeight-knlHeight+1;
+
+        float* inputImage = allocateAndPopulate( numKnls, imgWidth, imgHeight,channel,FILLPOSITION);
+        float* kernels = allocateAndPopulate(numKnls, knlWidth,knlHeight,channel, FILLPOSITION);
+        float* qsmlOutput = allocateAndPopulate(numKnls, outputWidth, outputHeight, 1, FILLZERO);
+        struct timespec timecount;
+
+        timecount = timer_start();
+        for (int repInd = 0; repInd < repeat; repInd++) {
+            sconv_mm(false, inputImage, imgWidth, imgHeight, channel,
+                     kernels, numKnls, knlWidth, knlHeight, 0, 0,
+                     1, 1, qsmlOutput, outputWidth, outputHeight);
+        }
+        long long timeSpent2 = timer_end(timecount);
+        LOGD("%d channel, %d filters:\tQSML\t%lld ms\n", channel, numKnls, (timeSpent2/repeat)/ 1000000);
+    }
+
+
+    void
+    Java_com_numericcal_convolutionbenchmark_MainActivity_launchConvNumericcalTryFilters(
+            JNIEnv *env,
+            jobject)
+    {
+
+
+        int repeat=10;
+        int imgWidth=512;
+        int imgHeight=512;
+        int knlWidth=3;
+        int knlHeight=3;
+        int channel_upper=32;
+        int channel_lower=32;
+        int numKnls_upper=16;
+        int numKnls_lower=1;
+        //int numKnls=1;
+
+        //LOGD("Hello world");
+        int outputWidth = imgWidth-knlWidth+1;
+        int outputHeight = imgHeight-knlHeight+1;
+
+        float* inputImage = allocateAndPopulate( 1, imgWidth, imgHeight,channel_upper,FILLPOSITION);
+        float* kernels = allocateAndPopulate(/*numKnls*/1, knlWidth,knlHeight,channel_upper, FILLPOSITION);
+        float* numericcalOutput = allocateAndPopulate(/*numKnls*/1, outputWidth, outputHeight, 1, FILLZERO);
+        float *goldenOutput = allocateAndPopulate(/*numKnls*/1, outputWidth, outputHeight, 1, FILLZERO);
+        for(int channel=channel_upper; channel>=channel_lower; channel--) {
+            struct timespec timecount;
+
+            for (int numKnls = numKnls_lower; numKnls<=channel; numKnls=numKnls*2 )
+            {
+                timecount = timer_start();
+                for (int repInd = 0; repInd < repeat; repInd++) {
+                    sconv_mm(false, inputImage, imgWidth, imgHeight, channel/numKnls,
+                             kernels, /*numKnls*/numKnls, knlWidth, knlHeight, 0, 0,
+                             1, 1, numericcalOutput, outputWidth, outputHeight);
+                }
+                long long timeSpent2 = timer_end(timecount);
+                LOGD("%d channel, %d filters:\tQSML\t%lld\n", channel/numKnls, numKnls, timeSpent2 / 1000000);
+            }
+        }
+        deallocate(inputImage);
+        deallocate(kernels);
+        deallocate(numericcalOutput);
+        deallocate(goldenOutput);
+
+        //rtStringStream<<timeSpent/1000000<< "ms v.s. QSML"<<timeSpent2/1000000<<", L1 dist to Golden "<<norml1dis<<"(normalized),"<<l1dis<<"(absolute)\n";
+    }
+
+    void Java_com_numericcal_convolutionbenchmark_MainActivity_launchConvNumericcalFilterLayout(
+            JNIEnv *env,
+            jobject) {
+        const qsml_int imageWidth = 4;
+        const qsml_int imageHeight = 4;
+        const qsml_int channels = 2;
+        const qsml_int numFilters = 2;
+        const qsml_int filterX = 2;
+        const qsml_int filterY = 2;
+        const qsml_int padX = 0;
+        const qsml_int padY = 0;
+        const qsml_int strideX = 1;
+        const qsml_int strideY = 1;
+        const qsml_int outputWidth = 3;
+        const qsml_int outputHeight = 3;
+
+        const qsml_int LDImage = imageWidth*channels;
+
+        // Create a dummy image
+        float *image = new float[ imageWidth * channels * imageHeight ] {1,1,1,2,1,2,1,2,
+                                                                         1,2,1,2,1,2,1,2,
+                                                                         1,2,1,2,1,2,1,2,
+                                                                         1,2,1,2,1,2,1,2};
+
+        // Create a filter
+        float *filters = new float[ numFilters * filterX * filterY * channels ] {3,4,
+                                                                                 1,4,
+                                                                                 3,4,
+                                                                                 3,4,
+                                                                                 3,4,
+                                                                                 3,4,
+                                                                                 3,4,
+                                                                                 3,4};
+
+        // Create output array
+        float *output = new float[ outputWidth * outputHeight * numFilters]{};
+
+
+        // Call sconv_mm()
+        sconv_mm(false, image, imageWidth, imageHeight, channels,
+                 filters, numFilters, filterX, filterY, padX, padY,
+                 strideX, strideY, output, outputWidth, outputHeight);
+
+        std::stringstream rtStringStream1;
+
+        // Print the result
+        for(qsml_long i=0; i < (outputWidth*outputHeight); i++)
+        {
+            rtStringStream1<<"\n[ ";
+
+            for(qsml_long j=0; j < numFilters; j++)
+            {
+                rtStringStream1 << output[i*numFilters + j] << " ";
+            }
+
+            rtStringStream1<<" ]";
+        }
+        LOGD(rtStringStream1.str().c_str());
+
+        // Clean up
+        delete[] output;
+        delete[] filters;
+        delete[] image;
+
+
+
+    }
+
+
+
+
+    void
+    Java_com_numericcal_convolutionbenchmark_MainActivity_launchConvNumericcalDummy(
+            JNIEnv *env,
+            jobject)
+    {
+
+
+        int repeat=10;
+        int imgWidth=512;
+        int imgHeight=512;
+        int knlWidth=3;
+        int knlHeight=3;
+        int channel_upper=64;
+        int channel_lower=1;
         int numKnls=1;
 
         //LOGD("Hello world");
@@ -2156,7 +2946,8 @@ extern "C"
         struct timespec timecount;
         timecount = timer_start();
         for (int repInd = 0; repInd < repeat; repInd++) {
-            /*numericcal_ChannelMajor*/numericcal_RowMajor_3Row_3OutMergeSteady(inputImage, imgWidth, imgHeight, channel, kernels, numKnls,
+            //numericcal_ChannelMajor
+            numericcal_RowMajor_3Row_3OutMergeSteady(inputImage, imgWidth, imgHeight, channel, kernels, numKnls,
                                     knlWidth,
                                     knlHeight, numericcalOutput, outputWidth,
                                     outputHeight);
@@ -2198,6 +2989,84 @@ extern "C"
 
         //rtStringStream<<timeSpent/1000000<< "ms v.s. QSML"<<timeSpent2/1000000<<", L1 dist to Golden "<<norml1dis<<"(normalized),"<<l1dis<<"(absolute)\n";
     }
+void
+    Java_com_numericcal_convolutionbenchmark_MainActivity_launchConvNumericcalDummy2(
+        JNIEnv *env,
+        jobject)
+    {
+
+
+        int repeat=10;
+        int imgWidth=512;
+        int imgHeight=512;
+        int knlWidth=3;
+        int knlHeight=3;
+        int channel_upper=16;
+        int channel_lower=16;
+        int numKnls=1;
+
+        //LOGD("Hello world");
+        int outputWidth = imgWidth-knlWidth+1;
+        int outputHeight = imgHeight-knlHeight+1;
+
+        float* inputImage = allocateAndPopulate( 1, imgWidth, imgHeight,channel_upper,FILLPOSITION);
+        float* kernels = allocateAndPopulate(numKnls, knlWidth,knlHeight,channel_upper, FILLPOSITION);
+        float* numericcalOutput = allocateAndPopulate(numKnls, outputWidth, outputHeight, 1, FILLZERO);
+        float *goldenOutput = allocateAndPopulate(numKnls, outputWidth, outputHeight, 1, FILLZERO);
+        for(int channel=channel_upper; channel>=channel_lower; channel--) {
+            struct timespec timecount;
+            timecount = timer_start();
+            for (int repInd = 0; repInd < repeat; repInd++) {
+                //numericcal_ChannelMajor
+                numericcal_RowMajor_3Row_3OutMergeSteadyEvenBetter(inputImage, imgWidth, imgHeight, channel, kernels, numKnls,
+                                                         knlWidth,
+                                                         knlHeight, numericcalOutput, outputWidth,
+                                                         outputHeight);
+            }
+            long long timeSpent = timer_end(timecount);
+            // now perform the comparison with the golden model
+
+            repopulate(numericcalOutput, numKnls, outputWidth, outputHeight, 1, FILLZERO);
+
+            numericcal_RowMajor_3Row_3OutMergeSteadyEvenBetter(inputImage, imgWidth, imgHeight, channel, kernels, numKnls,
+                                                     knlWidth,
+                                                     knlHeight, numericcalOutput, outputWidth,
+                                                     outputHeight);
+            //dumpArrayRowMajor(numericcalOutput, outputHeight, outputWidth, numKnls, channel);
+            goldWidthMajor(inputImage, imgWidth, imgHeight, channel, kernels, numKnls, knlWidth,
+                           knlHeight,
+                           goldenOutput, outputWidth, outputHeight);
+            //LOGD("----------------------\n");
+            //dumpArrayRowMajor(goldenOutput, outputHeight, outputWidth, numKnls, channel);
+            float norml1dis = norml1DistanceOutput(numericcalOutput, goldenOutput,
+                                                   outputWidth * outputHeight * numKnls);
+            float l1dis = l1DistanceOutput(numericcalOutput, goldenOutput,
+                                           outputWidth * outputHeight * numKnls);
+            repopulate(numericcalOutput, numKnls, outputWidth, outputHeight, 1, FILLZERO);
+            repopulate(goldenOutput, numKnls, outputWidth, outputHeight, 1, FILLZERO);
+            timecount = timer_start();
+            for (int repInd = 0; repInd < repeat; repInd++) {
+                sconv_mm(false, inputImage, imgWidth, imgHeight, channel,
+                         kernels, numKnls, knlWidth, knlHeight, 0, 0,
+                         1, 1, numericcalOutput, outputWidth, outputHeight);
+            }
+            long long timeSpent2 = timer_end(timecount);
+            LOGD("%d channel:\t%lld ms v.s. QSML\t%lld, L1 dist to Golden %f (normalized), %f (absolute)\n", channel, timeSpent/1000000, timeSpent2/1000000,norml1dis,l1dis);
+        }
+        deallocate(inputImage);
+        deallocate(kernels);
+        deallocate(numericcalOutput);
+        deallocate(goldenOutput);
+
+    //rtStringStream<<timeSpent/1000000<< "ms v.s. QSML"<<timeSpent2/1000000<<", L1 dist to Golden "<<norml1dis<<"(normalized),"<<l1dis<<"(absolute)\n";
+    }
+
+
+
+
+
+
+
 
 }
 #endif
